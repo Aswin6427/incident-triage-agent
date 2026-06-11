@@ -1,0 +1,82 @@
+{
+  "title": "P1: DB Connection Timeout on payment-service due to connection leak in v2.3.1",
+  "severity": "P1",
+  "service": "payment-service",
+  "duration_minutes": 18,
+  "timeline": [
+    {
+      "time": "2023-10-01T09:12:00Z",
+      "event": "Alert triggered: DB_CONNECTION_TIMEOUT on payment-service in us-east-1."
+    },
+    {
+      "time": "2023-10-01T09:14:00Z",
+      "event": "Initial triage identified recurring 'DB_POOL_EXHAUSTED' exceptions in logs."
+    },
+    {
+      "time": "2023-10-01T09:16:00Z",
+      "event": "Hypothesis formed: Connection leak in v2.3.1 causing pool exhaustion."
+    },
+    {
+      "time": "2023-10-01T09:20:00Z",
+      "event": "Rolled back payment-service to v2.2.9 and increased HikariCP pool size to 100."
+    },
+    {
+      "time": "2023-10-01T09:25:00Z",
+      "event": "Service metrics confirmed recovery; no further connection timeouts observed."
+    },
+    {
+      "time": "2023-10-01T09:30:00Z",
+      "event": "Incident resolved; root cause identified as unclosed PreparedStatement in v2.3.1."
+    }
+  ],
+  "confirmed_root_cause": "Connection leak introduced in v2.3.1 PaymentRepository.processRefund() - unclosed PreparedStatement in error path caused gradual pool exhaustion under load.",
+  "contributing_factors": [
+    "Recent deployment of v2.3.1 introduced the connection leak.",
+    "Lack of automated connection leak detection in CI pipeline prior to this incident.",
+    "High traffic load exacerbated the pool exhaustion issue."
+  ],
+  "impact": "Payment-service experienced widespread database connection timeouts, leading to failed payment processing and degraded customer experience in the us-east-1 region. Approximately 15% of payment transactions failed during the incident window.",
+  "resolution_summary": "Rolled back payment-service to v2.2.9, increased HikariCP pool size from 50 to 100, and added a connection leak detector to the CI pipeline. Service was restored within 18 minutes.",
+  "action_items": [
+    {
+      "priority": "High",
+      "action": "Implement automated connection leak detection in CI pipeline.",
+      "owner": "Application Team",
+      "due_days": 7
+    },
+    {
+      "priority": "High",
+      "action": "Audit all database interaction code for unclosed resources.",
+      "owner": "Application Team",
+      "due_days": 14
+    },
+    {
+      "priority": "Medium",
+      "action": "Optimize database indexes, particularly on the payments_v2 table.",
+      "owner": "DB Team",
+      "due_days": 10
+    },
+    {
+      "priority": "Medium",
+      "action": "Add monitoring alerts for HikariCP pool exhaustion thresholds.",
+      "owner": "Platform Team",
+      "due_days": 5
+    },
+    {
+      "priority": "Low",
+      "action": "Review and update runbooks to include connection leak troubleshooting steps.",
+      "owner": "Platform Team",
+      "due_days": 14
+    }
+  ],
+  "lessons_learned": "The incident highlighted the importance of automated connection leak detection in the CI pipeline to catch such issues before deployment. Additionally, high traffic scenarios should be simulated during testing to identify potential resource exhaustion risks.",
+  "prevention_steps": [
+    "Add automated connection leak detection to the CI pipeline.",
+    "Conduct a full audit of database interaction code to ensure proper resource management.",
+    "Simulate high traffic scenarios in staging environments to identify potential bottlenecks.",
+    "Enhance monitoring to include alerts for HikariCP pool exhaustion and slow query detection."
+  ],
+  "incident_id": "INC-2B1852",
+  "generated_at": "2026-06-04T12:09:51.972763+00:00",
+  "resolved_by": "Alice Chen (Platform Team - Morning On-Call)"
+}

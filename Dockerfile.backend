@@ -1,0 +1,40 @@
+# ============================================================
+#  Backend image — runs the FastAPI backend AND the 5 mock
+#  services. Which app starts is selected at runtime via the
+#  APP_MODULE env var (see docker/backend-entrypoint.sh):
+#    main:app                 -> triage backend   (default)
+#    mocks.mock_jira:app      -> mock Jira
+#    mocks.mock_splunk:app    -> mock Splunk
+#    mocks.mock_servicenow:app-> mock ServiceNow
+#    mocks.mock_slack:app     -> mock Slack
+#    mocks.mock_oncall:app    -> mock On-Call
+# ============================================================
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+# libgomp1 is required by faiss-cpu
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt --prefer-binary
+
+# Application code (includes the prebuilt RAG index under backend/rag/faiss_index)
+COPY backend/ ./backend/
+
+COPY docker/backend-entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Run from backend/ so `main:app` and `mocks.*:app` module paths resolve,
+# matching the local start.ps1 launch convention.
+WORKDIR /app/backend
+
+EXPOSE 8000
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

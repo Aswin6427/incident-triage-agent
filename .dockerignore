@@ -1,0 +1,14 @@
+# Build context slimming for the BACKEND image (built from repo root).
+venv/
+**/__pycache__/
+*.pyc
+.git/
+.env
+frontend/
+node_modules/
+tests/
+scripts/
+deploy/
+*.pdf
+*.md
+*.ps1

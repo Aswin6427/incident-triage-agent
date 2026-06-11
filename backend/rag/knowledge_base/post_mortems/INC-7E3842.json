@@ -1,0 +1,90 @@
+{
+  "title": "DB Connection Timeout on payment-service due to connection leak in v2.3.1",
+  "severity": "P1",
+  "service": "payment-service",
+  "duration_minutes": 85,
+  "timeline": [
+    {
+      "time": "2023-10-12T14:05:00Z",
+      "event": "Alert triggered: DB_CONNECTION_TIMEOUT on payment-service in us-east-1."
+    },
+    {
+      "time": "2023-10-12T14:10:00Z",
+      "event": "Initial triage identified connection pool exhaustion as the likely cause."
+    },
+    {
+      "time": "2023-10-12T14:25:00Z",
+      "event": "HikariCP metrics confirmed active connections exceeded pool size of 50."
+    },
+    {
+      "time": "2023-10-12T14:40:00Z",
+      "event": "Database query revealed unclosed connections originating from PaymentRepository."
+    },
+    {
+      "time": "2023-10-12T14:50:00Z",
+      "event": "Rolled back payment-service to v2.3.0 as a temporary mitigation."
+    },
+    {
+      "time": "2023-10-12T15:00:00Z",
+      "event": "Connection pool size increased from 50 to 100 to handle traffic spikes."
+    },
+    {
+      "time": "2023-10-12T15:20:00Z",
+      "event": "Hotfix v2.3.2 deployed to patch connection leak in PaymentRepository."
+    },
+    {
+      "time": "2023-10-12T15:30:00Z",
+      "event": "Incident resolved: DB connection timeouts ceased and service stabilized."
+    }
+  ],
+  "confirmed_root_cause": "Connection leak introduced in v2.3.1 - PaymentRepository failed to close connections on timeout path, exhausting the HikariCP pool under load.",
+  "contributing_factors": [
+    "High traffic volume exacerbated connection pool exhaustion.",
+    "Lack of automated connection leak detection in pre-production environments.",
+    "Delayed rollback decision due to ongoing investigation of alternative hypotheses."
+  ],
+  "impact": "Payment-service experienced intermittent DB connection timeouts, resulting in failed payment transactions and degraded customer experience. Approximately 15% of payment requests failed during the incident window.",
+  "resolution_summary": "Rolled back payment-service to v2.3.0, increased connection pool size from 50 to 100, and deployed hotfix v2.3.2 to patch the connection leak in PaymentRepository.",
+  "action_items": [
+    {
+      "priority": "High",
+      "action": "Implement automated connection leak detection in staging and production environments.",
+      "owner": "Platform Team",
+      "due_days": 14
+    },
+    {
+      "priority": "High",
+      "action": "Conduct a full code review of PaymentRepository to identify any other potential lifecycle issues.",
+      "owner": "Application Team",
+      "due_days": 7
+    },
+    {
+      "priority": "Medium",
+      "action": "Add monitoring alerts for abnormal connection pool usage patterns.",
+      "owner": "Platform Team",
+      "due_days": 10
+    },
+    {
+      "priority": "Medium",
+      "action": "Update runbooks to include rollback procedures for connection pool exhaustion scenarios.",
+      "owner": "SRE Team",
+      "due_days": 5
+    },
+    {
+      "priority": "Low",
+      "action": "Review and optimize database query execution plans for /api/payment and /api/refund endpoints.",
+      "owner": "Database Team",
+      "due_days": 21
+    }
+  ],
+  "lessons_learned": "The incident highlighted the importance of automated detection for connection leaks and the need for faster rollback decisions during critical outages. Additionally, pre-production environments must simulate high-traffic scenarios to uncover lifecycle issues before deployment.",
+  "prevention_steps": [
+    "Implement automated connection leak detection tools in staging and production environments.",
+    "Enhance pre-production testing to simulate high-traffic scenarios and identify lifecycle issues.",
+    "Add monitoring alerts for abnormal connection pool usage patterns.",
+    "Update runbooks with detailed rollback procedures for connection pool exhaustion scenarios."
+  ],
+  "incident_id": "INC-7E3842",
+  "generated_at": "2026-06-05T10:02:01.418845+00:00",
+  "resolved_by": "Alice Chen (Platform Team)"
+}

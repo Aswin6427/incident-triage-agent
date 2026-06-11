@@ -1,0 +1,21 @@
+# ── Python ───────────────────────────────────────────────────
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Secrets / local env ──────────────────────────────────────
+.env
+
+# ── Node / frontend build ────────────────────────────────────
+node_modules/
+frontend/dist/
+
+# ── Misc ─────────────────────────────────────────────────────
+*.log
+.DS_Store
+.vscode/
+.idea/
+
+# NOTE: backend/rag/faiss_index/ is intentionally committed so the
+# prebuilt RAG index ships in the backend image (it is tiny, ~123 KB).

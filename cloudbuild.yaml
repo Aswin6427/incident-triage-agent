@@ -1,0 +1,154 @@
+# ============================================================
+#  CI/CD pipeline — triggered on push to main (GitHub).
+#  test -> build images -> push -> deploy mocks -> backend -> frontend
+# ============================================================
+substitutions:
+  _REGION: us-central1
+  _AR_REPO: triage
+  _RUNTIME_SA: triage-run            # runtime service account (created by bootstrap.sh)
+  # Non-secret Azure OpenAI config (the API KEY comes from Secret Manager):
+  _AZURE_OPENAI_ENDPOINT: ""
+  _AZURE_OPENAI_DEPLOYMENT_NAME: "gpt-4o"
+  _AZURE_OPENAI_EMBEDDING_DEPLOYMENT: "text-embedding-3-small"
+  _AZURE_OPENAI_API_VERSION: "2024-02-15-preview"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+images:
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/backend:$SHORT_SHA"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/backend:latest"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/frontend:$SHORT_SHA"
+  - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/frontend:latest"
+
+steps:
+  # ── 1. Backend unit/integration tests (mocked LLM + MCP) ────
+  - id: test
+    name: python:3.12-slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        apt-get update && apt-get install -y --no-install-recommends libgomp1
+        pip install --no-cache-dir -r requirements-dev.txt --prefer-binary
+        PYTHONPATH=. python -m pytest -q
+
+  # ── 2. Build images (in parallel, after tests pass) ─────────
+  - id: build-backend
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["test"]
+    args:
+      - build
+      - -f
+      - Dockerfile.backend
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/backend:$SHORT_SHA"
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/backend:latest"
+      - .
+
+  - id: build-frontend
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["test"]
+    dir: frontend
+    args:
+      - build
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/frontend:$SHORT_SHA"
+      - -t
+      - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/frontend:latest"
+      - .
+
+  # ── 3. Push images before deploy ────────────────────────────
+  - id: push-backend
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["build-backend"]
+    args: ["push", "--all-tags", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/backend"]
+
+  - id: push-frontend
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["build-frontend"]
+    args: ["push", "--all-tags", "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/frontend"]
+
+  # ── 4. Deploy the 5 mock services ───────────────────────────
+  - id: deploy-mocks
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    waitFor: ["push-backend"]
+    args:
+      - -c
+      - |
+        set -e
+        IMG="${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/backend:$SHORT_SHA"
+        for entry in \
+          "mock-jira:mocks.mock_jira:app" \
+          "mock-splunk:mocks.mock_splunk:app" \
+          "mock-servicenow:mocks.mock_servicenow:app" \
+          "mock-slack:mocks.mock_slack:app" \
+          "mock-oncall:mocks.mock_oncall:app"; do
+          SVC="${entry%%:*}"; MODULE="${entry#*:}"
+          echo "Deploying $SVC ($MODULE)"
+          gcloud run deploy "$SVC" \
+            --image "$IMG" \
+            --region "${_REGION}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8000 \
+            --memory 512Mi \
+            --set-env-vars "APP_MODULE=$MODULE"
+        done
+
+  # ── 5. Deploy the backend (wired to mock URLs + Azure secret) ─
+  - id: deploy-backend
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    waitFor: ["deploy-mocks"]
+    args:
+      - -c
+      - |
+        set -e
+        url() { gcloud run services describe "$1" --region "${_REGION}" --format 'value(status.url)'; }
+        JIRA=$(url mock-jira); SPLUNK=$(url mock-splunk); SNOW=$(url mock-servicenow)
+        SLACK=$(url mock-slack); ONCALL=$(url mock-oncall)
+        gcloud run deploy triage-backend \
+          --image "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/backend:$SHORT_SHA" \
+          --region "${_REGION}" \
+          --platform managed \
+          --allow-unauthenticated \
+          --service-account "${_RUNTIME_SA}@$PROJECT_ID.iam.gserviceaccount.com" \
+          --port 8000 \
+          --memory 2Gi \
+          --cpu 2 \
+          --min-instances 1 \
+          --max-instances 1 \
+          --no-cpu-throttling \
+          --session-affinity \
+          --timeout 3600 \
+          --set-secrets "AZURE_OPENAI_API_KEY=azure-openai-key:latest" \
+          --set-env-vars "^@@^APP_MODULE=main:app@@AZURE_OPENAI_ENDPOINT=${_AZURE_OPENAI_ENDPOINT}@@AZURE_OPENAI_DEPLOYMENT_NAME=${_AZURE_OPENAI_DEPLOYMENT_NAME}@@AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${_AZURE_OPENAI_EMBEDDING_DEPLOYMENT}@@AZURE_OPENAI_API_VERSION=${_AZURE_OPENAI_API_VERSION}@@MOCK_JIRA_URL=${JIRA}@@MOCK_SPLUNK_URL=${SPLUNK}@@MOCK_SERVICENOW_URL=${SNOW}@@MOCK_SLACK_URL=${SLACK}@@MOCK_ONCALL_URL=${ONCALL}"
+
+  # ── 6. Deploy the frontend (wired to the backend URL) ───────
+  - id: deploy-frontend
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    waitFor: ["deploy-backend", "push-frontend"]
+    args:
+      - -c
+      - |
+        set -e
+        BACKEND_URL=$(gcloud run services describe triage-backend --region "${_REGION}" --format 'value(status.url)')
+        BACKEND_HOST="${BACKEND_URL#https://}"
+        gcloud run deploy triage-frontend \
+          --image "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/frontend:$SHORT_SHA" \
+          --region "${_REGION}" \
+          --platform managed \
+          --allow-unauthenticated \
+          --port 8080 \
+          --memory 256Mi \
+          --set-env-vars "BACKEND_HOST=${BACKEND_HOST}"
+        echo "============================================================"
+        echo " Frontend URL:"
+        gcloud run services describe triage-frontend --region "${_REGION}" --format 'value(status.url)'
+        echo "============================================================"
