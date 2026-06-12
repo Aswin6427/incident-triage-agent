@@ -6,16 +6,19 @@ from functools import lru_cache
 # Always resolve .env relative to this file's location (backend/), so it works
 # regardless of the working directory uvicorn / scripts are launched from.
 _ENV_FILE = Path(__file__).parent.parent / ".env"
-_DEFAULT_INDEX_PATH = str(Path(__file__).parent / "rag" / "faiss_index")
 
 
 class Settings(BaseSettings):
     # ── Azure OpenAI ──────────────────────────────────────────
+    # Auth uses an API key. `azure_openai_endpoint` is the resource
+    # endpoint, e.g. https://<resource>.openai.azure.com/. The chat and
+    # embedding "models" below are Azure *deployment* names, not raw
+    # model ids.
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
-    azure_openai_deployment_name: str = "gpt-4o"
+    azure_openai_api_version: str = "2024-10-21"
+    azure_openai_chat_deployment: str = "gpt-4o"
     azure_openai_embedding_deployment: str = "text-embedding-3-small"
-    azure_openai_api_version: str = "2024-02-15-preview"
 
     # ── Backend ───────────────────────────────────────────────
     backend_host: str = "0.0.0.0"
@@ -28,8 +31,12 @@ class Settings(BaseSettings):
     mock_slack_url: str = "http://localhost:8004"
     mock_oncall_url: str = "http://localhost:8005"
 
-    # ── RAG ───────────────────────────────────────────────────
-    faiss_index_path: str = _DEFAULT_INDEX_PATH
+    # ── RAG / Vector store (Azure Database for PostgreSQL + pgvector) ──
+    # SQLAlchemy-style URL using the psycopg (v3) driver, e.g.
+    #   postgresql+psycopg://user:pwd@host:5432/dbname?sslmode=require
+    # Azure Postgres requires SSL (sslmode=require).
+    database_url: str = ""
+    pg_collection_name: str = "incident_triage_kb"
     chunk_size: int = 400
     chunk_overlap: int = 50
     top_k_retrieval: int = 5

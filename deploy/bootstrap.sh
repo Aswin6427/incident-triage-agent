@@ -13,11 +13,16 @@ AR_REPO="${AR_REPO:-triage}"
 RUNTIME_SA="${RUNTIME_SA:-triage-run}"
 GITHUB_OWNER="${GITHUB_OWNER:-your-github-username-or-org}"
 GITHUB_REPO="${GITHUB_REPO:-incident-triage-agent}"
-# Non-secret Azure OpenAI config injected into the backend at deploy time:
-AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-https://YOUR-RESOURCE.openai.azure.com/}"
-AZURE_OPENAI_DEPLOYMENT_NAME="${AZURE_OPENAI_DEPLOYMENT_NAME:-gpt-4o}"
+# Azure OpenAI config injected into the backend at deploy time.
+# Endpoint + deployment names are plain env vars; the API key is stored in
+# Secret Manager (created below) and mounted at runtime.
+AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-https://your-resource.openai.azure.com/}"
+AZURE_OPENAI_API_VERSION="${AZURE_OPENAI_API_VERSION:-2024-10-21}"
+AZURE_OPENAI_CHAT_DEPLOYMENT="${AZURE_OPENAI_CHAT_DEPLOYMENT:-gpt-4o}"
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT="${AZURE_OPENAI_EMBEDDING_DEPLOYMENT:-text-embedding-3-small}"
-AZURE_OPENAI_API_VERSION="${AZURE_OPENAI_API_VERSION:-2024-02-15-preview}"
+AZURE_OPENAI_KEY_SECRET="${AZURE_OPENAI_KEY_SECRET:-azure-openai-api-key}"
+# Set AZURE_OPENAI_API_KEY in your shell before running to seed the secret.
+AZURE_OPENAI_API_KEY="${AZURE_OPENAI_API_KEY:-}"
 # ─────────────────────────────────────────────────────────────
 
 echo ">> Project: $PROJECT_ID   Region: $REGION"
@@ -42,17 +47,19 @@ gcloud iam service-accounts create "$RUNTIME_SA" \
   --display-name="Triage backend runtime" 2>/dev/null || echo "   (already exists)"
 RUNTIME_SA_EMAIL="${RUNTIME_SA}@${PROJECT_ID}.iam.gserviceaccount.com"
 
-echo ">> Creating secret 'azure-openai-key'..."
-if ! gcloud secrets describe azure-openai-key >/dev/null 2>&1; then
-  read -r -s -p "   Paste your Azure OpenAI API key: " AZ_KEY; echo
-  printf '%s' "$AZ_KEY" | gcloud secrets create azure-openai-key \
-    --replication-policy=automatic --data-file=-
+echo ">> Creating Secret Manager secret '$AZURE_OPENAI_KEY_SECRET' for the Azure OpenAI API key..."
+gcloud secrets create "$AZURE_OPENAI_KEY_SECRET" \
+  --replication-policy=automatic 2>/dev/null || echo "   (already exists)"
+if [ -n "$AZURE_OPENAI_API_KEY" ]; then
+  printf '%s' "$AZURE_OPENAI_API_KEY" | gcloud secrets versions add "$AZURE_OPENAI_KEY_SECRET" --data-file=-
+  echo "   (added a new secret version from \$AZURE_OPENAI_API_KEY)"
 else
-  echo "   (already exists — to rotate: gcloud secrets versions add azure-openai-key --data-file=-)"
+  echo "   NOTE: \$AZURE_OPENAI_API_KEY not set — add the key manually with:"
+  echo "         printf '%s' '<your-key>' | gcloud secrets versions add $AZURE_OPENAI_KEY_SECRET --data-file=-"
 fi
 
-echo ">> Granting runtime SA access to the secret..."
-gcloud secrets add-iam-policy-binding azure-openai-key \
+echo ">> Granting runtime SA access to the Azure OpenAI key secret..."
+gcloud secrets add-iam-policy-binding "$AZURE_OPENAI_KEY_SECRET" \
   --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
   --role=roles/secretmanager.secretAccessor >/dev/null
 
@@ -83,7 +90,7 @@ cat <<EOF
    --repo-name=${GITHUB_REPO} \\
    --branch-pattern='^main\$' \\
    --build-config=cloudbuild.yaml \\
-   --substitutions=_REGION=${REGION},_AR_REPO=${AR_REPO},_RUNTIME_SA=${RUNTIME_SA},_AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT},_AZURE_OPENAI_DEPLOYMENT_NAME=${AZURE_OPENAI_DEPLOYMENT_NAME},_AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT},_AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION}
+   --substitutions=_REGION=${REGION},_AR_REPO=${AR_REPO},_RUNTIME_SA=${RUNTIME_SA},_AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT},_AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION},_AZURE_OPENAI_CHAT_DEPLOYMENT=${AZURE_OPENAI_CHAT_DEPLOYMENT},_AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${AZURE_OPENAI_EMBEDDING_DEPLOYMENT},_AZURE_OPENAI_KEY_SECRET=${AZURE_OPENAI_KEY_SECRET}
 
  Bootstrap complete. Push to main to run the pipeline, or run it
  manually now with:

@@ -34,34 +34,40 @@ images, pushes them to Artifact Registry, and deploys 7 Cloud Run services.
 ## First-time setup
 
 1. Push this repo to GitHub (`main` branch).
-2. In Cloud Shell (or any shell with `gcloud`):
+2. In any shell with `gcloud`:
    ```bash
    export PROJECT_ID=your-project GITHUB_OWNER=you GITHUB_REPO=incident-triage-agent
-   export AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+   export AZURE_OPENAI_API_KEY='<your-azure-openai-api-key>'   # seeds the secret
    bash deploy/bootstrap.sh
    ```
-   It enables APIs, creates the Artifact Registry repo, the runtime service
-   account, the `azure-openai-key` secret, and grants IAM. It then prints the
-   manual GitHub-connect step and the `triggers create` command.
+   It enables APIs (including Secret Manager), creates the Artifact Registry
+   repo, the runtime service account, creates a Secret Manager secret for the
+   Azure OpenAI API key (seeded from `$AZURE_OPENAI_API_KEY` if set), grants the
+   runtime SA `roles/secretmanager.secretAccessor`, and grants the Cloud Build
+   IAM. It then prints the manual GitHub-connect step and the `triggers create`
+   command.
 3. Connect the repo + create the trigger as printed.
 
 ## What runs on each push
 
 `cloudbuild.yaml` stages: `test → build-backend/-frontend → push → deploy-mocks
 → deploy-backend → deploy-frontend`. The backend is wired to the mock service
-URLs and the Azure key (from Secret Manager) at deploy time; the frontend is
-wired to the backend URL. The final log line prints the public frontend URL.
+URLs and the Azure OpenAI config (endpoint + deployment names, plus the API key
+from Secret Manager) at deploy time; the frontend is wired to the backend URL.
+The final log line prints the public frontend URL.
 
-## Secrets & config
+## AI auth & config
 
 | Item | Where |
 |------|-------|
-| `AZURE_OPENAI_API_KEY` | Secret Manager `azure-openai-key` → injected via `--set-secrets` |
-| Endpoint / deployment names / API version | trigger substitutions (`_AZURE_OPENAI_*`) |
+| Azure OpenAI API key | Secret Manager secret (`azure-openai-api-key`), mounted as `AZURE_OPENAI_API_KEY` via `--set-secrets`; runtime SA has `roles/secretmanager.secretAccessor` |
+| `AZURE_OPENAI_ENDPOINT` | trigger substitution `_AZURE_OPENAI_ENDPOINT`, set as a backend env var |
+| API version / chat deployment / embedding deployment | trigger substitutions (`_AZURE_OPENAI_API_VERSION`, `_AZURE_OPENAI_CHAT_DEPLOYMENT`, `_AZURE_OPENAI_EMBEDDING_DEPLOYMENT`) |
 | Mock service URLs | resolved at deploy time, set as backend env vars |
 
-Rotate the key: `gcloud secrets versions add azure-openai-key --data-file=-`
-then redeploy (push or re-run the trigger).
+To change the deployment/endpoint, edit the `_AZURE_OPENAI_*` substitutions on
+the trigger and redeploy (push or re-run the trigger). To rotate the key, add a
+new version to the `azure-openai-api-key` secret.
 
 ## Run the pipeline manually (without a push)
 

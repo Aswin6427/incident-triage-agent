@@ -19,7 +19,7 @@ LangGraph Orchestrator  (orchestrator/graph.py)
        |              |                           |
        v              v                           v
 LogAnalyzerAgent  PastTicketAgent            RunbookAgent
-(Splunk 100k logs) (Jira + ServiceNow)       (FAISS RAG)
+(Splunk 100k logs) (Jira + ServiceNow)      (pgvector RAG)
        |              |                           |
        |         [open ticket detection]          |
        +--[merge]-----+---------------------------+
@@ -52,7 +52,7 @@ LogAnalyzerAgent  PastTicketAgent            RunbookAgent
 |---|---|
 | Python | 3.8+ |
 | Node.js | 16+ |
-| Azure OpenAI | API access required |
+| Azure OpenAI resource | A chat + embedding deployment, plus the endpoint URL and an API key |
 
 ### Option A — One-command startup (recommended)
 
@@ -71,7 +71,8 @@ LogAnalyzerAgent  PastTicketAgent            RunbookAgent
 **1. Configure environment**
 ```powershell
 copy .env.example .env
-# Edit .env — fill in AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_DEPLOYMENT_NAME
+# Edit .env — set AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, and the
+# chat/embedding deployment names so the app can call Azure OpenAI.
 ```
 
 **2. Create virtual environment and install dependencies**
@@ -234,7 +235,7 @@ incident-triage-agent/
 |   |-- agents/
 |   |   |-- log_analyzer.py      # Queries Splunk, LLM analysis of logs
 |   |   |-- past_ticket.py       # Queries Jira + ServiceNow, detects open tickets
-|   |   |-- runbook.py           # FAISS RAG retrieval + LLM summarisation
+|   |   |-- runbook.py           # pgvector RAG retrieval + LLM summarisation
 |   |   +-- root_cause.py        # Synthesises all evidence incl. open tickets
 |   |
 |   |-- mcp/
@@ -252,7 +253,8 @@ incident-triage-agent/
 |   |   +-- mock_slack.py        # In-memory message store
 |   |
 |   |-- rag/
-|   |   |-- pipeline.py          # Build FAISS index from runbooks + past incidents
+|   |   |-- pipeline.py          # Embed runbooks + past incidents into pgvector
+|   |   |-- vectorstore.py       # Shared Azure Postgres (pgvector) store factory
 |   |   +-- retriever.py         # Semantic search at runtime
 |   |
 |   +-- data/
@@ -345,12 +347,12 @@ MAX_TRIAGE_TIMEOUT_SECONDS=600   # 10 minutes (default)
 ## Configuration (.env)
 
 ```env
-# Azure OpenAI
-AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com/
-AZURE_OPENAI_API_KEY=<key>
-AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o
+# Azure OpenAI (auth via API key; chat/embedding are deployment names)
+AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+AZURE_OPENAI_API_KEY=<your-azure-openai-api-key>
+AZURE_OPENAI_API_VERSION=2024-10-21
+AZURE_OPENAI_CHAT_DEPLOYMENT=gpt-4o
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small
-AZURE_OPENAI_API_VERSION=2024-02-15-preview
 
 # Backend
 BACKEND_HOST=0.0.0.0
@@ -363,7 +365,8 @@ MOCK_SERVICENOW_URL=http://localhost:8003
 MOCK_SLACK_URL=http://localhost:8004
 
 # RAG
-FAISS_INDEX_PATH=./rag/faiss_index
+DATABASE_URL=postgresql+psycopg://<user>:<password>@<server>.postgres.database.azure.com:5432/<db>?sslmode=require
+PG_COLLECTION_NAME=incident_triage_kb
 CHUNK_SIZE=400
 CHUNK_OVERLAP=50
 TOP_K_RETRIEVAL=5
@@ -383,7 +386,7 @@ MAX_SIMILAR_INCIDENTS=5
 | AI orchestration | LangGraph 1.2 |
 | LLM | Azure OpenAI (GPT-4o) |
 | Embeddings | Azure OpenAI (text-embedding-3-small) |
-| Vector store | FAISS |
+| Vector store | Azure Database for PostgreSQL + pgvector |
 | Backend API | FastAPI + Uvicorn |
 | Mock services | FastAPI (x4) |
 | HTTP client | HTTPX (async) |

@@ -6,11 +6,14 @@ substitutions:
   _REGION: us-central1
   _AR_REPO: triage
   _RUNTIME_SA: triage-run            # runtime service account (created by bootstrap.sh)
-  # Non-secret Azure OpenAI config (the API KEY comes from Secret Manager):
-  _AZURE_OPENAI_ENDPOINT: ""
-  _AZURE_OPENAI_DEPLOYMENT_NAME: "gpt-4o"
+  # Azure OpenAI config. The endpoint + deployment names are passed as plain
+  # env vars; the API key is injected from Secret Manager (secret name below)
+  # so it never appears in build logs or substitutions.
+  _AZURE_OPENAI_ENDPOINT: "https://your-resource.openai.azure.com/"
+  _AZURE_OPENAI_API_VERSION: "2024-10-21"
+  _AZURE_OPENAI_CHAT_DEPLOYMENT: "gpt-4o"
   _AZURE_OPENAI_EMBEDDING_DEPLOYMENT: "text-embedding-3-small"
-  _AZURE_OPENAI_API_VERSION: "2024-02-15-preview"
+  _AZURE_OPENAI_KEY_SECRET: "azure-openai-api-key"   # Secret Manager secret holding the API key
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -100,7 +103,7 @@ steps:
             --set-env-vars "APP_MODULE=$MODULE"
         done
 
-  # ── 5. Deploy the backend (wired to mock URLs + Azure secret) ─
+  # ── 5. Deploy the backend (wired to mock URLs + Azure OpenAI) ─
   - id: deploy-backend
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
@@ -126,8 +129,8 @@ steps:
           --no-cpu-throttling \
           --session-affinity \
           --timeout 3600 \
-          --set-secrets "AZURE_OPENAI_API_KEY=azure-openai-key:latest" \
-          --set-env-vars "^@@^APP_MODULE=main:app@@AZURE_OPENAI_ENDPOINT=${_AZURE_OPENAI_ENDPOINT}@@AZURE_OPENAI_DEPLOYMENT_NAME=${_AZURE_OPENAI_DEPLOYMENT_NAME}@@AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${_AZURE_OPENAI_EMBEDDING_DEPLOYMENT}@@AZURE_OPENAI_API_VERSION=${_AZURE_OPENAI_API_VERSION}@@MOCK_JIRA_URL=${JIRA}@@MOCK_SPLUNK_URL=${SPLUNK}@@MOCK_SERVICENOW_URL=${SNOW}@@MOCK_SLACK_URL=${SLACK}@@MOCK_ONCALL_URL=${ONCALL}"
+          --set-env-vars "^@@^APP_MODULE=main:app@@AZURE_OPENAI_ENDPOINT=${_AZURE_OPENAI_ENDPOINT}@@AZURE_OPENAI_API_VERSION=${_AZURE_OPENAI_API_VERSION}@@AZURE_OPENAI_CHAT_DEPLOYMENT=${_AZURE_OPENAI_CHAT_DEPLOYMENT}@@AZURE_OPENAI_EMBEDDING_DEPLOYMENT=${_AZURE_OPENAI_EMBEDDING_DEPLOYMENT}@@MOCK_JIRA_URL=${JIRA}@@MOCK_SPLUNK_URL=${SPLUNK}@@MOCK_SERVICENOW_URL=${SNOW}@@MOCK_SLACK_URL=${SLACK}@@MOCK_ONCALL_URL=${ONCALL}" \
+          --set-secrets "AZURE_OPENAI_API_KEY=${_AZURE_OPENAI_KEY_SECRET}:latest"
 
   # ── 6. Deploy the frontend (wired to the backend URL) ───────
   - id: deploy-frontend

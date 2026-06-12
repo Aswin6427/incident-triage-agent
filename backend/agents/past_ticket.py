@@ -29,9 +29,9 @@ Return ONLY valid JSON with two keys:
 def _get_llm() -> AzureChatOpenAI:
     return AzureChatOpenAI(
         azure_endpoint=settings.azure_openai_endpoint,
-        azure_deployment=settings.azure_openai_deployment_name,
-        api_version=settings.azure_openai_api_version,
         api_key=settings.azure_openai_api_key,
+        api_version=settings.azure_openai_api_version,
+        azure_deployment=settings.azure_openai_chat_deployment,
         temperature=0,
         max_tokens=1500,  # ranked JSON output fits comfortably in 1500
     )

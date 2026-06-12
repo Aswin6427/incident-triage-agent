@@ -4,13 +4,11 @@ and adds the learnings back into the RAG knowledge base for future triage.
 """
 import json
 import logging
-import pickle
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 from langchain_openai import AzureChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -20,7 +18,6 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 _KB_DIR = Path(__file__).parent.parent / "rag" / "knowledge_base" / "post_mortems"
-_INDEX_PATH = Path(settings.faiss_index_path)
 
 # Compact schema — same contract, ~40% fewer tokens than the original
 SYSTEM_PROMPT = """You are a senior SRE writing a formal post-mortem.
@@ -45,9 +42,9 @@ Return ONLY valid JSON:
 def _get_llm() -> AzureChatOpenAI:
     return AzureChatOpenAI(
         azure_endpoint=settings.azure_openai_endpoint,
-        azure_deployment=settings.azure_openai_deployment_name,
-        api_version=settings.azure_openai_api_version,
         api_key=settings.azure_openai_api_key,
+        api_version=settings.azure_openai_api_version,
+        azure_deployment=settings.azure_openai_chat_deployment,
         temperature=0,
         max_tokens=2000,
     )
@@ -138,10 +135,11 @@ Generate the full post-mortem. Return ONLY valid JSON.
         logger.info("[PostMortemAgent] Saved to %s", out_path)
 
     async def _update_rag(self, incident_id: str, post_mortem: Dict[str, Any]):
-        """Incrementally add post-mortem learnings to the FAISS index."""
+        """Append post-mortem learnings to the pgvector knowledge base."""
         try:
-            import faiss
-            from openai import AzureOpenAI
+            # Lazy import keeps a missing/unreachable DB from blocking the
+            # rest of post-mortem generation.
+            from backend.rag.vectorstore import get_vectorstore
 
             # Build a rich text chunk from the post-mortem
             chunk = (
@@ -153,36 +151,12 @@ Generate the full post-mortem. Return ONLY valid JSON.
                 f"Lessons: {post_mortem.get('lessons_learned', '')}"
             )
 
-            client = AzureOpenAI(
-                azure_endpoint=settings.azure_openai_endpoint,
-                api_key=settings.azure_openai_api_key,
-                api_version=settings.azure_openai_api_version,
+            store = get_vectorstore()
+            store.add_texts(
+                texts=[chunk],
+                metadatas=[{"source": f"post_mortem:{incident_id}"}],
             )
-            resp = client.embeddings.create(
-                input=[chunk],
-                model=settings.azure_openai_embedding_deployment,
-            )
-            embedding = np.array([resp.data[0].embedding], dtype=np.float32)
 
-            index_file    = _INDEX_PATH / "index.faiss"
-            metadata_file = _INDEX_PATH / "metadata.pkl"
-
-            if not index_file.exists():
-                logger.warning("[PostMortemAgent] FAISS index not found, skipping update")
-                return
-
-            index = faiss.read_index(str(index_file))
-            with open(metadata_file, "rb") as f:
-                metadata = pickle.load(f)
-
-            index.add(embedding)
-            metadata["texts"].append(chunk)
-            metadata["sources"].append(f"post_mortem:{incident_id}")
-
-            faiss.write_index(index, str(index_file))
-            with open(metadata_file, "wb") as f:
-                pickle.dump(metadata, f)
-
-            logger.info("[PostMortemAgent] RAG index updated with %d total vectors", index.ntotal)
+            logger.info("[PostMortemAgent] pgvector KB updated with post-mortem %s", incident_id)
         except Exception as exc:
             logger.error("[PostMortemAgent] RAG update failed (non-fatal): %s", exc)

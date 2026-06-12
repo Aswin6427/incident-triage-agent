@@ -1,22 +1,25 @@
 """
-RAG Pipeline — chunks runbook documents and past incidents,
-embeds them with Azure OpenAI, and stores in a FAISS index.
+RAG Pipeline — chunks runbook documents and past incidents, embeds them
+with Azure OpenAI, and stores them in the Azure Database for PostgreSQL
+(pgvector) knowledge base.
 
-Run this script once (or when knowledge base changes):
+Run this script once (or when the knowledge base changes):
     python -m backend.rag.pipeline
+
+Requires DATABASE_URL to point at a Postgres server with the `vector`
+extension available (on Azure: allowlist it via the `azure.extensions`
+server parameter, then `CREATE EXTENSION IF NOT EXISTS vector;`).
 """
-import os
 import json
 import logging
-import pickle
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List
 
-import numpy as np
-import faiss
-from openai import AzureOpenAI
+from langchain_core.documents import Document
+from langchain_postgres import PGVector
 
 from backend.config import get_settings
+from backend.rag.vectorstore import get_embeddings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -24,7 +27,6 @@ settings = get_settings()
 KB_DIR = Path(__file__).parent / "knowledge_base"
 RUNBOOKS_DIR = KB_DIR / "runbooks"
 PAST_INCIDENTS_FILE = KB_DIR / "past_incidents.json"
-INDEX_PATH = Path(settings.faiss_index_path)
 
 
 def chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]:
@@ -39,15 +41,15 @@ def chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]
     return chunks
 
 
-def load_documents() -> List[Dict[str, str]]:
-    """Load all runbook Markdown files and past incidents JSON."""
-    docs = []
+def load_documents() -> List[Document]:
+    """Load all runbook Markdown files and past incidents as LangChain Documents."""
+    docs: List[Document] = []
 
     # ── Load runbooks ────────────────────────────────────────
     for md_file in RUNBOOKS_DIR.glob("*.md"):
         text = md_file.read_text(encoding="utf-8")
         for i, chunk in enumerate(chunk_text(text, settings.chunk_size, settings.chunk_overlap)):
-            docs.append({"text": chunk, "source": f"runbook:{md_file.stem}:{i}"})
+            docs.append(Document(page_content=chunk, metadata={"source": f"runbook:{md_file.stem}:{i}"}))
         logger.info(f"Loaded runbook: {md_file.name}")
 
     # ── Load past incidents ──────────────────────────────────
@@ -60,65 +62,45 @@ def load_documents() -> List[Dict[str, str]]:
                 f"Root Cause: {inc.get('root_cause')} | "
                 f"Resolution: {inc.get('resolution')}"
             )
-            docs.append({"text": summary, "source": f"incident:{inc.get('ticket_id')}"})
+            docs.append(Document(page_content=summary, metadata={"source": f"incident:{inc.get('ticket_id')}"}))
         logger.info(f"Loaded {len(incidents)} past incidents")
 
     return docs
 
 
-def embed_texts(texts: List[str]) -> np.ndarray:
-    """Embed a list of texts using Azure OpenAI embeddings."""
-    client = AzureOpenAI(
-        azure_endpoint=settings.azure_openai_endpoint,
-        api_key=settings.azure_openai_api_key,
-        api_version=settings.azure_openai_api_version,
-    )
-
-    embeddings = []
-    batch_size = 16
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        response = client.embeddings.create(
-            input=batch,
-            model=settings.azure_openai_embedding_deployment,
-        )
-        embeddings.extend([e.embedding for e in response.data])
-        logger.info(f"Embedded batch {i // batch_size + 1}")
-
-    return np.array(embeddings, dtype=np.float32)
-
-
 def build_index() -> None:
-    """Build FAISS index from knowledge base documents."""
-    logger.info("Building RAG index...")
-    docs = load_documents()
+    """(Re)build the pgvector collection from knowledge base documents."""
+    logger.info("Building RAG index in Azure Postgres (pgvector)...")
 
+    if not settings.database_url:
+        logger.error("DATABASE_URL is not set — cannot build the pgvector index.")
+        return
+
+    docs = load_documents()
     if not docs:
         logger.error("No documents found in knowledge base!")
         return
 
-    texts = [d["text"] for d in docs]
-    sources = [d["source"] for d in docs]
+    logger.info(f"Embedding {len(docs)} chunks via Azure OpenAI and writing to pgvector...")
+    # pre_delete_collection=True gives a clean rebuild each run (idempotent).
+    PGVector.from_documents(
+        documents=docs,
+        embedding=get_embeddings(),
+        collection_name=settings.pg_collection_name,
+        connection=settings.database_url,
+        use_jsonb=True,
+        pre_delete_collection=True,
+    )
 
-    logger.info(f"Embedding {len(texts)} chunks...")
-    embeddings = embed_texts(texts)
-
-    # Build FAISS flat L2 index
-    dimension = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dimension)
-    index.add(embeddings)
-
-    # Persist index and metadata
-    INDEX_PATH.mkdir(parents=True, exist_ok=True)
-    faiss.write_index(index, str(INDEX_PATH / "index.faiss"))
-    with open(INDEX_PATH / "metadata.pkl", "wb") as f:
-        pickle.dump({"texts": texts, "sources": sources}, f)
-
-    logger.info(f"✅ Index built with {index.ntotal} vectors → {INDEX_PATH}")
+    logger.info(
+        "Index built: %d chunks -> pgvector collection '%s'",
+        len(docs),
+        settings.pg_collection_name,
+    )
 
 
 class RAGPipeline:
-    """Wrapper to (re)build the FAISS index programmatically."""
+    """Wrapper to (re)build the pgvector index programmatically."""
 
     def build(self) -> None:
         build_index()

@@ -1,6 +1,6 @@
 """
-RunbookAgent — retrieves relevant runbook sections using RAG (FAISS vector search)
-and maps them to the current alert's failure pattern.
+RunbookAgent — retrieves relevant runbook sections using RAG (pgvector
+semantic search) and maps them to the current alert's failure pattern.
 """
 import logging
 from functools import lru_cache
@@ -27,9 +27,9 @@ Given runbook excerpts, return a structured plain-text summary with sections:
 def _get_llm() -> AzureChatOpenAI:
     return AzureChatOpenAI(
         azure_endpoint=settings.azure_openai_endpoint,
-        azure_deployment=settings.azure_openai_deployment_name,
-        api_version=settings.azure_openai_api_version,
         api_key=settings.azure_openai_api_key,
+        api_version=settings.azure_openai_api_version,
+        azure_deployment=settings.azure_openai_chat_deployment,
         temperature=0,
         max_tokens=1000,  # plain-text runbook summary needs less than 1500
     )
@@ -53,7 +53,7 @@ class RunbookAgent:
         # ── Step 1: Build search query ────────────────────────
         query = f"{service} {alert_type} {error_code}".strip()
 
-        # ── Step 2: Semantic search in FAISS ──────────────────
+        # ── Step 2: Semantic search in pgvector ───────────────
         chunks = self.retriever.search(query, top_k=settings.top_k_retrieval)
 
         if not chunks:

@@ -111,7 +111,7 @@ $EnvExample = Join-Path $ProjectRoot ".env.example"
 if (-not (Test-Path $EnvFile)) {
     if (Test-Path $EnvExample) {
         Copy-Item $EnvExample $EnvFile
-        Write-Warn ".env created from .env.example - fill in your Azure OpenAI credentials before running the agent"
+        Write-Warn ".env created from .env.example - set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY before running the agent"
     } else {
         Write-Warn ".env not found and no .env.example to copy from"
     }
@@ -119,18 +119,22 @@ if (-not (Test-Path $EnvFile)) {
     Write-Ok ".env file exists"
     $EnvContent = Get-Content $EnvFile -Raw
     if ($EnvContent -match 'your[_-]|<.*>|PLACEHOLDER|changeme') {
-        Write-Warn ".env may still have placeholder values - verify Azure OpenAI credentials are set"
+        Write-Warn ".env may still have placeholder values - verify AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY are set"
     } else {
         Write-Ok ".env credentials look configured"
     }
 }
 
-# ── 5. RAG Knowledge Base ────────────────────────────────────
+# ── 5. RAG Knowledge Base (Azure Postgres + pgvector) ────────
 Write-Header "RAG Knowledge Base"
 
-$FaissIndex = Join-Path $ProjectRoot "backend\rag\faiss_index"
-if (-not (Test-Path $FaissIndex)) {
-    Write-Info "FAISS index not found - building RAG pipeline (this may take ~30s)..."
+$EnvContentRag = if (Test-Path $EnvFile) { Get-Content $EnvFile -Raw } else { "" }
+$DbConfigured = ($EnvContentRag -match 'DATABASE_URL=postgresql') -and ($EnvContentRag -notmatch 'CHANGE_ME|<password>|<user>')
+
+if (-not $DbConfigured) {
+    Write-Warn "DATABASE_URL not configured in .env - skipping RAG index build. Set it to your Azure Postgres (pgvector) URL, then run: python -m backend.rag.pipeline"
+} else {
+    Write-Info "Building RAG index into Azure Postgres (pgvector)..."
     $env:PYTHONPATH = $ProjectRoot
     Push-Location $BackendDir
     $prevEAP = $ErrorActionPreference
@@ -143,10 +147,8 @@ if (-not (Test-Path $FaissIndex)) {
     if ($ragExit -ne 0) {
         Write-Warn "RAG pipeline build failed - continuing without it (some features may be limited)"
     } else {
-        Write-Ok "RAG knowledge base built"
+        Write-Ok "RAG knowledge base built in pgvector"
     }
-} else {
-    Write-Ok "RAG knowledge base already indexed"
 }
 
 # ── 6. Frontend Dependencies ─────────────────────────────────

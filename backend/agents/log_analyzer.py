@@ -32,9 +32,9 @@ Return ONLY valid JSON."""
 def _get_llm() -> AzureChatOpenAI:
     return AzureChatOpenAI(
         azure_endpoint=settings.azure_openai_endpoint,
-        azure_deployment=settings.azure_openai_deployment_name,
-        api_version=settings.azure_openai_api_version,
         api_key=settings.azure_openai_api_key,
+        api_version=settings.azure_openai_api_version,
+        azure_deployment=settings.azure_openai_chat_deployment,
         temperature=0,
         max_tokens=1000,  # structured JSON output needs less than 1500
     )
