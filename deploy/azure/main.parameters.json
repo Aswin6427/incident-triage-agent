@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "azureOpenAiEndpoint": {
+      "value": "https://2226375-6041-resource.openai.azure.com/"
+    },
+    "azureOpenAiApiVersion": {
+      "value": "2024-10-21"
+    },
+    "azureOpenAiChatDeployment": {
+      "value": "gpt-4o"
+    },
+    "azureOpenAiEmbeddingDeployment": {
+      "value": "text-embedding-3-small"
+    },
+    "pgCollectionName": {
+      "value": "incident_triage_kb"
+    }
+  }
+}

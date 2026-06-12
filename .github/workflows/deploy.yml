@@ -1,0 +1,87 @@
+# ============================================================
+#  CI/CD — test, build images in ACR, deploy to Azure Container Apps.
+#  Triggered on push to main. Replaces the GCP Cloud Build pipeline.
+#
+#  Auth: Azure OIDC (passwordless). Configure these repo secrets first
+#  (deploy/azure/bootstrap.sh prints them):
+#    AZURE_CLIENT_ID        - app registration (federated) client id
+#    AZURE_TENANT_ID        - directory/tenant id
+#    AZURE_SUBSCRIPTION_ID  - subscription id
+#  And these repo variables:
+#    AZURE_RESOURCE_GROUP   - e.g. rg-triage
+#    ACR_NAME               - the ACR name from the bicep output
+# ============================================================
+name: deploy
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  id-token: write      # required for OIDC az login
+  contents: read
+
+env:
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  ACR_NAME: ${{ vars.ACR_NAME }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dev deps
+        run: pip install --no-cache-dir -r requirements-dev.txt --prefer-binary
+      - name: Run tests
+        run: PYTHONPATH=. python -m pytest -q
+
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── Build images server-side in ACR (no docker needed on the runner) ──
+      - name: Build backend image
+        run: |
+          az acr build --registry "$ACR_NAME" \
+            --image "backend:${GITHUB_SHA}" --image "backend:latest" \
+            --file Dockerfile.backend .
+
+      - name: Build frontend image
+        run: |
+          az acr build --registry "$ACR_NAME" \
+            --image "frontend:${GITHUB_SHA}" --image "frontend:latest" \
+            --file frontend/Dockerfile frontend
+
+      # ── Roll the new images onto each container app ──
+      - name: Deploy backend + mocks
+        run: |
+          LOGIN_SERVER="$(az acr show -n "$ACR_NAME" --query loginServer -o tsv)"
+          for app in triage-backend mock-jira mock-splunk mock-servicenow mock-slack mock-oncall; do
+            echo "Updating $app"
+            az containerapp update -g "$RESOURCE_GROUP" -n "$app" \
+              --image "${LOGIN_SERVER}/backend:${GITHUB_SHA}"
+          done
+
+      - name: Deploy frontend
+        run: |
+          LOGIN_SERVER="$(az acr show -n "$ACR_NAME" --query loginServer -o tsv)"
+          az containerapp update -g "$RESOURCE_GROUP" -n triage-frontend \
+            --image "${LOGIN_SERVER}/frontend:${GITHUB_SHA}"
+
+      - name: Print frontend URL
+        run: |
+          az containerapp show -g "$RESOURCE_GROUP" -n triage-frontend \
+            --query 'properties.configuration.ingress.fqdn' -o tsv

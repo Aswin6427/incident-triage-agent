@@ -17,16 +17,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# libgomp1 is required by faiss-cpu
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt --prefer-binary
 
-# Application code (includes the prebuilt RAG index under backend/rag/faiss_index)
+# Application code. The RAG knowledge base is embedded into Azure Postgres
+# (pgvector) by a separate one-off job — it is NOT built into the image.
 COPY backend/ ./backend/
 
 COPY docker/backend-entrypoint.sh /usr/local/bin/entrypoint.sh
