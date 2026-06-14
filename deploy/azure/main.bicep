@@ -196,7 +196,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
       ingress: {
         external: false
         targetPort: 8000
-        transport: 'auto'
+        transport: 'http'   // force HTTP/1.1 (nginx + WebSocket /ws need it; 'auto' can negotiate HTTP/2 and 426)
         // Stateful: in-memory incidents + WebSocket + predictive-monitor loop.
         stickySessions: { affinity: 'sticky' }
       }
@@ -241,7 +241,7 @@ resource mockApps 'Microsoft.App/containerApps@2024-03-01' = [for m in mocks: {
       ingress: {
         external: false
         targetPort: 8000
-        transport: 'auto'
+        transport: 'http'   // force HTTP/1.1 (nginx + WebSocket /ws need it; 'auto' can negotiate HTTP/2 and 426)
       }
       registries: registries
       secrets: [ acrPasswordSecret ]
@@ -276,7 +276,7 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
       ingress: {
         external: true
         targetPort: 8080
-        transport: 'auto'
+        transport: 'http'   // force HTTP/1.1 (nginx + WebSocket /ws need it; 'auto' can negotiate HTTP/2 and 426)
       }
       registries: registries
       secrets: [ acrPasswordSecret ]
