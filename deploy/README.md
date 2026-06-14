@@ -40,37 +40,37 @@ and an Azure OpenAI resource with `gpt-4o` + `text-embedding-3-small` deployment
 > creates no role assignments (ACR uses admin creds; Key Vault uses access
 > policies). GitHub Actions CI is the one exception (see below).
 
-1. **Provision infra** from **Azure Cloud Shell** (or any shell with `az login`):
-   ```bash
-   export AZURE_OPENAI_API_KEY='<your key>'
-   export DATABASE_URL='postgresql+psycopg://triageadmin:<pwd>@triage-pg-2226375.postgres.database.azure.com:5432/postgres?sslmode=require'
-   export RESOURCE_GROUP=rg-triage
-   bash deploy/azure/bootstrap.sh
-   ```
-   This validates + deploys `main.bicep` (ACR, ACA env, Key Vault + secrets,
-   identity, the 7 apps on a placeholder image, and the index job), then prints
-   the build/deploy commands for the next step.
+### Quick deploy — fresh Azure Cloud Shell (recommended)
 
-2. **Build images + roll them onto the apps** (run from the repo root; the exact
-   commands are printed by step 1):
-   ```bash
-   ACR=<acrName from step 1>
-   LOGIN_SERVER=$(az acr show -n "$ACR" --query loginServer -o tsv)
-   az acr build --registry "$ACR" --image backend:v1  --file Dockerfile.backend .
-   az acr build --registry "$ACR" --image frontend:v1 --file frontend/Dockerfile frontend
-   for app in triage-backend mock-jira mock-splunk mock-servicenow mock-slack mock-oncall; do
-     az containerapp update -g rg-triage -n "$app" --image "$LOGIN_SERVER/backend:v1"
-   done
-   az containerapp update     -g rg-triage -n triage-frontend    --image "$LOGIN_SERVER/frontend:v1"
-   az containerapp job  update -g rg-triage -n triage-index-build --image "$LOGIN_SERVER/backend:v1"
-   ```
+One idempotent script does everything (provision → build → roll out → index →
+warm). Re-run it any time, including from a brand-new Cloud Shell session.
 
-3. **Populate the pgvector index:**
-   ```bash
-   az containerapp job start -g rg-triage -n triage-index-build
-   ```
+```bash
+# 1. set the two secrets
+export AZURE_OPENAI_API_KEY='<your Azure OpenAI key>'
+export DATABASE_URL='postgresql+psycopg://triageadmin:<pwd>@triage-pg-2226375.postgres.database.azure.com:5432/postgres?sslmode=require'
 
-4. Open the frontend URL (printed in step 1).
+# 2. clone + run the one-shot deploy
+git clone https://github.com/Aswin6427/incident-triage-agent.git
+cd incident-triage-agent
+bash deploy/azure/cloud-shell-deploy.sh
+```
+
+`cloud-shell-deploy.sh` provisions infra via Bicep, builds + pushes the backend
+and frontend images to ACR (tagged with the git SHA), rolls them onto all 7 apps
+and the index job, runs `triage-index-build` to populate pgvector, warms the
+scale-to-zero mocks, and prints the live frontend URL. Default resource group is
+`GenAI_Mentorship_Group` (override with `RESOURCE_GROUP`).
+
+### Manual steps (if you prefer to run them one at a time)
+
+1. **Provision infra:** `bash deploy/azure/bootstrap.sh` (deploys `main.bicep`,
+   prints the ACR name + build/deploy commands).
+2. **Build + roll out images** with `az acr build` then `az containerapp update`
+   for `triage-backend`, the five `mock-*`, `triage-frontend`, and the
+   `triage-index-build` job (commands printed by step 1).
+3. **Populate the index:** `az containerapp job start -g <rg> -n triage-index-build`.
+4. **Open** the frontend URL.
 
 ## CI/CD (optional — needs an admin once)
 

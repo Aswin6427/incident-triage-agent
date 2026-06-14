@@ -155,9 +155,10 @@ def build_doc():
     ))
     story.append(Paragraph(
         "The stack: <b>React + TypeScript</b> frontend, <b>FastAPI</b> backend, "
-        "<b>LangGraph</b> state machine, <b>Azure OpenAI GPT</b> for reasoning, "
-        "<b>FAISS</b> vector store for runbook retrieval, and five mock microservices "
-        "(Jira, Splunk, ServiceNow, Slack, On-Call).",
+        "<b>LangGraph</b> state machine, <b>Azure OpenAI GPT-4o</b> for reasoning, "
+        "<b>Azure Database for PostgreSQL + pgvector</b> for runbook retrieval, and five "
+        "mock microservices (Jira, Splunk, ServiceNow, Slack, On-Call). It is deployed on "
+        "<b>Azure Container Apps</b> (see Section 9).",
         S["body"],
     ))
 
@@ -264,7 +265,7 @@ def build_doc():
         "  ├────────────────────────┬────────────────────────┐\n"
         "  ▼                        ▼                        ▼\n"
         "log_analyzer_node    past_ticket_node         runbook_node\n"
-        "(Splunk logs)        (Jira + ServiceNow)      (FAISS / RAG)\n"
+        "(Splunk logs)        (Jira + ServiceNow)      (pgvector / RAG)\n"
         "  │                        │                        │\n"
         "  └────────────────────────┴────────────────────────┘\n"
         "                           │   fan-in (all 3 must finish)\n"
@@ -294,8 +295,8 @@ def build_doc():
          "search_past_incidents → Jira (8001)\nsearch_servicenow_incidents → ServiceNow (8003)",
          "Historical resolved incidents matching the service + alert type.\nAlso returns currently OPEN / IN-PROGRESS tickets."],
         ["RunbookAgent",
-         "RAGRetriever.search()\n→ local FAISS index",
-         "Top-5 semantically similar runbook chunks.\nEmbedded at startup using Azure OpenAI Embeddings API."],
+         "RAGRetriever.search()\n→ Azure Postgres (pgvector)",
+         "Top-5 semantically similar runbook chunks.\nEmbedded with Azure OpenAI and stored in pgvector."],
     ]
     pt = Table(parallel_data, colWidths=[3.5*cm, 4.5*cm, 8.2*cm])
     pt.setStyle(TableStyle([
@@ -552,14 +553,14 @@ def build_doc():
         S["body"],
     ))
 
-    story.append(Paragraph("Build phase  (runs once at startup if index missing):", S["h3"]))
+    story.append(Paragraph("Build phase  (one-off job — backend/rag/pipeline.py):", S["h3"]))
     story.append(code_block(
-        "backend/rag/pipeline.py\n"
-        "  1. Read runbook text files from backend/data/\n"
-        "  2. Split into overlapping chunks (~500 tokens each)\n"
-        "  3. Call Azure OpenAI Embeddings API → each chunk → float32 vector\n"
-        "  4. Store vectors in FAISS flat index\n"
-        "  5. Save index.faiss + metadata.pkl to backend/rag/faiss_index/",
+        "backend/rag/pipeline.py   (run as the triage-index-build ACA Job)\n"
+        "  1. Read runbook markdown + past incidents from backend/rag/knowledge_base/\n"
+        "  2. Split into overlapping chunks (~400 words each)\n"
+        "  3. Call Azure OpenAI Embeddings (text-embedding-3-small) → 1536-dim vector\n"
+        "  4. Upsert vectors + metadata into Azure Postgres via langchain-postgres PGVector\n"
+        "  5. Collection 'incident_triage_kb' (pre_delete_collection → clean rebuild)",
         S,
     ))
 
@@ -567,7 +568,7 @@ def build_doc():
     story.append(code_block(
         "RAGRetriever.search(query=\"DB_CONNECTION_TIMEOUT payment-service\")\n"
         "  1. Embed the query string via Azure OpenAI Embeddings\n"
-        "  2. FAISS.search(query_vector, top_k=5)  ← cosine-like L2 nearest-neighbour\n"
+        "  2. PGVector.similarity_search_with_score(query, k=5)  ← pgvector cosine search\n"
         "  3. Return top-5 chunks ranked by similarity score\n"
         "  4. Chunks are concatenated and passed as \"RUNBOOK GUIDANCE\" in the LLM prompt",
         S,
@@ -822,9 +823,117 @@ def build_doc():
     ))
 
     # ══════════════════════════════════════════════════════════
-    # SECTION 9 — END-TO-END SUMMARY
+    # SECTION 9 — TECH STACK & AZURE DEPLOYMENT
     # ══════════════════════════════════════════════════════════
-    story.append(Paragraph("9.  End-to-End Summary", S["h1"]))
+    story.append(Paragraph("9.  Tech Stack &amp; Azure Deployment", S["h1"]))
+    story.append(Paragraph(
+        "The application is fully migrated to Azure: Azure OpenAI for inference, Azure "
+        "Database for PostgreSQL (pgvector) for the vector store, and Azure Container Apps "
+        "for compute. All infrastructure is defined as code in Bicep.",
+        S["body"],
+    ))
+
+    story.append(Paragraph("Technology stack", S["h2"]))
+    stack_data = [
+        ["Layer", "Technology"],
+        ["Frontend",          "React + TypeScript + Vite + Tailwind, served by nginx"],
+        ["Backend",           "FastAPI + Uvicorn (Python 3.12), LangGraph state machine"],
+        ["LLM (reasoning)",   "Azure OpenAI — GPT-4o, via langchain-openai (AzureChatOpenAI)"],
+        ["Embeddings",        "Azure OpenAI — text-embedding-3-small (1536-dim)"],
+        ["Vector store",      "Azure Database for PostgreSQL Flexible Server + pgvector (langchain-postgres)"],
+        ["Agent tooling",     "MCP Gateway — 9 typed tools fronting 5 mock services"],
+        ["Compute",           "Azure Container Apps (Consumption plan)"],
+        ["Image registry",    "Azure Container Registry (Basic)"],
+        ["Secrets / identity","Azure Key Vault (access policies) + user-assigned Managed Identity"],
+        ["Observability",     "Azure Log Analytics (ACA-integrated, 1 GB/day cap)"],
+        ["CI/CD",             "GitHub Actions (test → ACR build → containerapp update) — optional"],
+        ["Infrastructure",    "Bicep — deploy/azure/main.bicep"],
+    ]
+    stack_table = Table(stack_data, colWidths=[4.2*cm, 12*cm])
+    stack_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  DARK_BG),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  WHITE),
+        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_BG, WHITE]),
+        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 7),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(stack_table)
+    story.append(Spacer(1, 0.3*cm))
+
+    story.append(Paragraph("Azure deployment topology", S["h2"]))
+    story.append(code_block(
+        "Azure Container Apps environment  (region: eastus2)\n"
+        "\n"
+        "  triage-frontend   EXTERNAL ingress (nginx :8080)  ──►  public HTTPS URL\n"
+        "       │  reverse-proxies REST + /ws  (HTTP/1.1)\n"
+        "       ▼\n"
+        "  triage-backend    INTERNAL ingress (:8000)  ·  1 replica, sticky sessions\n"
+        "       │            (stateful: in-memory state + WebSocket + monitor loop)\n"
+        "       ├──► mock-jira / splunk / servicenow / slack / oncall  (INTERNAL, scale-to-zero)\n"
+        "       ├──► Azure OpenAI       (gpt-4o + text-embedding-3-small)\n"
+        "       └──► Azure PostgreSQL   (pgvector collection: incident_triage_kb)\n"
+        "\n"
+        "  triage-index-build   manual ACA Job → python -m backend.rag.pipeline\n"
+        "\n"
+        "  Supporting: Azure Container Registry · Key Vault · Managed Identity · Log Analytics",
+        S,
+    ))
+
+    story.append(Paragraph("Resource sizing (demo / low-usage)", S["h3"]))
+    sizing_data = [
+        ["App", "Replicas", "CPU / Memory", "Always-on"],
+        ["triage-backend",     "1 → 1",  "0.5 / 1.0 Gi",  "Yes (stateful)"],
+        ["mock-* (x5)",        "0 → 1",  "0.25 / 0.5 Gi", "No — scale to zero"],
+        ["triage-frontend",    "0 → 1",  "0.25 / 0.5 Gi", "No — scale to zero"],
+        ["triage-index-build", "job",    "0.5 / 1.0 Gi",  "No — on demand"],
+    ]
+    sizing_table = Table(sizing_data, colWidths=[4.5*cm, 2.5*cm, 4*cm, 5.2*cm])
+    sizing_table.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  DARK_BG),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  WHITE),
+        ("FONTNAME",      (0, 0), (-1, 0),  "Helvetica-Bold"),
+        ("FONTSIZE",      (0, 0), (-1, -1), 8.5),
+        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [LIGHT_BG, WHITE]),
+        ("GRID",          (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
+        ("TOPPADDING",    (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 7),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(sizing_table)
+    story.append(Spacer(1, 0.3*cm))
+
+    story.append(Paragraph("Deploy from a fresh Azure Cloud Shell", S["h3"]))
+    story.append(code_block(
+        "# 1. set the two secrets (Azure OpenAI key + Postgres URL)\n"
+        "export AZURE_OPENAI_API_KEY='<your-key>'\n"
+        "export DATABASE_URL='postgresql+psycopg://user:pwd@host:5432/postgres?sslmode=require'\n"
+        "\n"
+        "# 2. clone + run the one-shot deploy (idempotent — re-run any time)\n"
+        "git clone https://github.com/Aswin6427/incident-triage-agent.git\n"
+        "cd incident-triage-agent\n"
+        "bash deploy/azure/cloud-shell-deploy.sh\n"
+        "\n"
+        "# It provisions infra (Bicep), builds + pushes images to ACR, rolls them\n"
+        "# onto all apps, runs the index-build job, and prints the live frontend URL.",
+        S,
+    ))
+    story.append(Paragraph(
+        "Runs entirely as a Contributor (no role assignments): ACR uses admin credentials "
+        "and Key Vault uses access policies. CI/CD via GitHub Actions is optional and needs "
+        "a one-time admin OIDC setup.",
+        S["note"],
+    ))
+
+    # ══════════════════════════════════════════════════════════
+    # SECTION 10 — END-TO-END SUMMARY
+    # ══════════════════════════════════════════════════════════
+    story.append(Paragraph("10.  End-to-End Summary", S["h1"]))
 
     summary_data = [
         ["Path", "In one sentence"],
@@ -836,8 +945,8 @@ def build_doc():
          "Background loop polls Splunk trend data every N seconds → 3 statistical thresholds "
          "detect anomalies → predictions pushed to UI before the incident actually fires."],
         ["RAG knowledge base",
-         "Runbook documents pre-embedded into FAISS at startup → semantically searched at "
-         "triage time → top-5 relevant chunks injected into the LLM reasoning prompt."],
+         "Runbook documents pre-embedded into Azure Postgres (pgvector) by a one-off job → "
+         "semantically searched at triage time → top-5 chunks injected into the LLM prompt."],
         ["MCP Gateway",
          "Single tool-call bus between agents and all external systems — "
          "9 registered tools, all swappable for real services without changing agent code."],
