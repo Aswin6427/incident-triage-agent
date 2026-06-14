@@ -36,44 +36,61 @@ Prerequisites: an Azure Postgres Flexible Server with the `vector` extension
 enabled and a firewall rule allowing Azure services (see the project README),
 and an Azure OpenAI resource with `gpt-4o` + `text-embedding-3-small` deployments.
 
-1. From **Azure Cloud Shell** (or any shell with `az login`):
+> **Permissions:** the whole flow runs as a plain **Contributor** — the template
+> creates no role assignments (ACR uses admin creds; Key Vault uses access
+> policies). GitHub Actions CI is the one exception (see below).
+
+1. **Provision infra** from **Azure Cloud Shell** (or any shell with `az login`):
    ```bash
    export AZURE_OPENAI_API_KEY='<your key>'
    export DATABASE_URL='postgresql+psycopg://triageadmin:<pwd>@triage-pg-2226375.postgres.database.azure.com:5432/postgres?sslmode=require'
-   export RESOURCE_GROUP=rg-triage GITHUB_OWNER=Aswin6427 GITHUB_REPO=incident-triage-agent
+   export RESOURCE_GROUP=rg-triage
    bash deploy/azure/bootstrap.sh
    ```
-   This creates the GitHub OIDC app registration, deploys all infrastructure via
-   Bicep, and prints the GitHub secrets/variables to set.
+   This validates + deploys `main.bicep` (ACR, ACA env, Key Vault + secrets,
+   identity, the 7 apps on a placeholder image, and the index job), then prints
+   the build/deploy commands for the next step.
 
-2. In **GitHub → Settings → Secrets and variables → Actions**, add the printed
-   secrets (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`) and
-   variables (`AZURE_RESOURCE_GROUP`, `ACR_NAME`).
+2. **Build images + roll them onto the apps** (run from the repo root; the exact
+   commands are printed by step 1):
+   ```bash
+   ACR=<acrName from step 1>
+   LOGIN_SERVER=$(az acr show -n "$ACR" --query loginServer -o tsv)
+   az acr build --registry "$ACR" --image backend:v1  --file Dockerfile.backend .
+   az acr build --registry "$ACR" --image frontend:v1 --file frontend/Dockerfile frontend
+   for app in triage-backend mock-jira mock-splunk mock-servicenow mock-slack mock-oncall; do
+     az containerapp update -g rg-triage -n "$app" --image "$LOGIN_SERVER/backend:v1"
+   done
+   az containerapp update     -g rg-triage -n triage-frontend    --image "$LOGIN_SERVER/frontend:v1"
+   az containerapp job  update -g rg-triage -n triage-index-build --image "$LOGIN_SERVER/backend:v1"
+   ```
 
-3. Push to `main` (or run the **deploy** workflow manually). The first run builds
-   the real images in ACR and rolls them onto the apps (bootstrap initially used a
-   placeholder image).
-
-4. Populate the pgvector index once images exist:
+3. **Populate the pgvector index:**
    ```bash
    az containerapp job start -g rg-triage -n triage-index-build
    ```
 
-## What runs on each push
+4. Open the frontend URL (printed in step 1).
 
-`.github/workflows/deploy.yml`: **test → `az acr build` (backend + frontend) →
-`az containerapp update`** for all 7 apps. Auth is GitHub OIDC (passwordless) —
-no stored service-principal secret.
+## CI/CD (optional — needs an admin once)
+
+`.github/workflows/deploy.yml` automates **test → `az acr build` →
+`az containerapp update`** on push to `main` via GitHub OIDC (passwordless). It
+requires a one-time setup that needs **Owner / User Access Administrator** (a
+plain Contributor can't): create a federated app registration and grant it
+Contributor on the resource group, then set repo secrets
+`AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` and variables
+`AZURE_RESOURCE_GROUP` / `ACR_NAME`. Until then, deploy manually (steps 2–3).
 
 ## AI auth & config
 
 | Item | Where |
 |------|-------|
-| Azure OpenAI API key | Key Vault secret `azure-openai-api-key`, referenced by the backend + index job via the managed identity (`Key Vault Secrets User`) |
-| `DATABASE_URL` (incl. PG password) | Key Vault secret `database-url`, same reference path |
+| Azure OpenAI API key | Key Vault secret `azure-openai-api-key`, read at runtime by the backend + index job via the managed identity (Key Vault **access policy**, `get`) |
+| `DATABASE_URL` (incl. PG password) | Key Vault secret `database-url`, same path |
 | Endpoint / API version / deployment names / collection | non-secret env vars (Bicep params in `main.parameters.json`) |
 | Mock service URLs | internal ACA FQDNs, set as backend env vars by Bicep |
-| ACR pull | managed identity with `AcrPull` — no registry admin creds |
+| ACR pull | registry **admin credentials**; password injected as an ACA secret (no AcrPull role assignment) |
 
 ## Demo cost posture
 

@@ -1,71 +1,42 @@
 #!/usr/bin/env bash
 # ============================================================
-#  One-time Azure setup for the Incident Triage Agent on
-#  Azure Container Apps. Run from Azure Cloud Shell (recommended)
-#  or any shell with `az` logged in (`az login`).
+#  Provision the Incident Triage Agent infrastructure on Azure
+#  Container Apps. Designed to run as a plain CONTRIBUTOR (no
+#  Owner / User Access Administrator) — it creates NO role
+#  assignments. Run from Azure Cloud Shell (recommended) or any
+#  shell with `az` logged in (`az login`).
 #
-#  It:
-#    1. ensures the resource group exists
-#    2. creates an Entra app registration + GitHub OIDC federated
-#       credential and grants it Contributor on the resource group
-#    3. deploys deploy/azure/main.bicep (ACR, ACA env, Key Vault,
-#       identity, the 7 apps + index-build job)
-#    4. prints the GitHub repo secrets/variables to configure
+#  It deploys deploy/azure/main.bicep: ACR (admin creds), ACA
+#  environment, Key Vault (access policies) + secrets, managed
+#  identity, the 7 container apps (on a placeholder image) and
+#  the index-build job. CI is not wired (GitHub OIDC needs an
+#  admin) — build + deploy images manually afterwards (the
+#  README and the printed next-steps show how).
 #
 #  Required env vars (export before running — these are secrets):
 #    AZURE_OPENAI_API_KEY   the Azure OpenAI key
 #    DATABASE_URL           postgresql+psycopg://user:pwd@host:5432/db?sslmode=require
-#
-#  The signed-in principal needs Owner (or Contributor + User Access
-#  Administrator) on the resource group: this script creates role
-#  assignments (GitHub SP, managed identity, Key Vault data-plane).
 # ============================================================
 set -euo pipefail
 
 # ── Edit these ───────────────────────────────────────────────
 RESOURCE_GROUP="${RESOURCE_GROUP:-rg-triage}"
 LOCATION="${LOCATION:-eastus}"
-GITHUB_OWNER="${GITHUB_OWNER:-Aswin6427}"
-GITHUB_REPO="${GITHUB_REPO:-incident-triage-agent}"
-GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
-APP_REG_NAME="${APP_REG_NAME:-triage-github-oidc}"
 # ─────────────────────────────────────────────────────────────
 
 : "${AZURE_OPENAI_API_KEY:?export AZURE_OPENAI_API_KEY before running}"
 : "${DATABASE_URL:?export DATABASE_URL before running}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUB_ID="$(az account show --query id -o tsv)"
-TENANT_ID="$(az account show --query tenantId -o tsv)"
 
-echo ">> Subscription: $SUB_ID   RG: $RESOURCE_GROUP   Region: $LOCATION"
+echo ">> Subscription: $(az account show --query name -o tsv)"
+echo ">> Resource group: $RESOURCE_GROUP   Region: $LOCATION"
 az group create -n "$RESOURCE_GROUP" -l "$LOCATION" >/dev/null
 
-# ── 1. GitHub OIDC app registration + federated credential ───
-echo ">> Creating Entra app registration '$APP_REG_NAME' for GitHub OIDC..."
-APP_ID="$(az ad app list --display-name "$APP_REG_NAME" --query '[0].appId' -o tsv)"
-if [ -z "$APP_ID" ]; then
-  APP_ID="$(az ad app create --display-name "$APP_REG_NAME" --query appId -o tsv)"
-fi
-# Service principal for the app (idempotent)
-az ad sp create --id "$APP_ID" >/dev/null 2>&1 || true
+echo ">> Validating Bicep..."
+az bicep build -f "${SCRIPT_DIR}/main.bicep" --stdout >/dev/null && echo "   Bicep OK"
 
-echo ">> Adding federated credential (repo:${GITHUB_OWNER}/${GITHUB_REPO}, branch ${GITHUB_BRANCH})..."
-az ad app federated-credential create --id "$APP_ID" --parameters "{
-  \"name\": \"github-${GITHUB_BRANCH}\",
-  \"issuer\": \"https://token.actions.githubusercontent.com\",
-  \"subject\": \"repo:${GITHUB_OWNER}/${GITHUB_REPO}:ref:refs/heads/${GITHUB_BRANCH}\",
-  \"audiences\": [\"api://AzureADTokenExchange\"]
-}" 2>/dev/null || echo "   (federated credential already exists)"
-
-echo ">> Granting the app Contributor on the resource group..."
-az role assignment create \
-  --assignee "$APP_ID" \
-  --role Contributor \
-  --scope "/subscriptions/${SUB_ID}/resourceGroups/${RESOURCE_GROUP}" >/dev/null 2>&1 || true
-
-# ── 2. Deploy the infrastructure ─────────────────────────────
-echo ">> Deploying main.bicep (this provisions ACR, ACA env, Key Vault, identity, apps, job)..."
+echo ">> Deploying infrastructure (ACR, ACA env, Key Vault, identity, apps, job)..."
 DEPLOY_OUT="$(az deployment group create \
   --resource-group "$RESOURCE_GROUP" \
   --template-file "${SCRIPT_DIR}/main.bicep" \
@@ -73,30 +44,34 @@ DEPLOY_OUT="$(az deployment group create \
   --parameters azureOpenAiApiKey="$AZURE_OPENAI_API_KEY" databaseUrl="$DATABASE_URL" \
   --query properties.outputs -o json)"
 
-ACR_NAME="$(echo "$DEPLOY_OUT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["acrName"]["value"])')"
-FRONTEND_URL="$(echo "$DEPLOY_OUT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["frontendUrl"]["value"])')"
+get() { echo "$DEPLOY_OUT" | python3 -c "import sys,json;print(json.load(sys.stdin)['$1']['value'])"; }
+ACR_NAME="$(get acrName)"
+FRONTEND_URL="$(get frontendUrl)"
 
 cat <<EOF
 
 ============================================================
- Bootstrap complete.
+ Infrastructure deployed. The 7 apps are running a PLACEHOLDER
+ image until you build and push the real ones.
 
- Configure these in GitHub → Settings → Secrets and variables → Actions:
+ Next — build images and roll them onto the apps (Contributor is
+ enough; run from the repo root in Cloud Shell):
 
-   Repository SECRETS:
-     AZURE_CLIENT_ID        = ${APP_ID}
-     AZURE_TENANT_ID        = ${TENANT_ID}
-     AZURE_SUBSCRIPTION_ID  = ${SUB_ID}
+   ACR=${ACR_NAME}
+   LOGIN_SERVER=\$(az acr show -n "\$ACR" --query loginServer -o tsv)
 
-   Repository VARIABLES:
-     AZURE_RESOURCE_GROUP   = ${RESOURCE_GROUP}
-     ACR_NAME               = ${ACR_NAME}
+   # build both images server-side in ACR
+   az acr build --registry "\$ACR" --image backend:v1  --file Dockerfile.backend .
+   az acr build --registry "\$ACR" --image frontend:v1 --file frontend/Dockerfile frontend
 
- Then push to '${GITHUB_BRANCH}' (or run the 'deploy' workflow manually).
- The first run builds the real images and rolls them onto the apps
- (the initial deploy used a placeholder image).
+   # roll the real images onto every app
+   for app in triage-backend mock-jira mock-splunk mock-servicenow mock-slack mock-oncall; do
+     az containerapp update -g ${RESOURCE_GROUP} -n "\$app" --image "\$LOGIN_SERVER/backend:v1"
+   done
+   az containerapp update     -g ${RESOURCE_GROUP} -n triage-frontend    --image "\$LOGIN_SERVER/frontend:v1"
+   az containerapp job  update -g ${RESOURCE_GROUP} -n triage-index-build --image "\$LOGIN_SERVER/backend:v1"
 
- After images are built, populate the pgvector index by starting the job:
+   # populate the pgvector index
    az containerapp job start -g ${RESOURCE_GROUP} -n triage-index-build
 
  Frontend URL (live once the real frontend image is deployed):

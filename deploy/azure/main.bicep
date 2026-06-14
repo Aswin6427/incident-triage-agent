@@ -60,10 +60,13 @@ var mocks = [
   { name: 'mock-oncall',     module: 'mocks.mock_oncall:app' }
 ]
 
-// Built-in role definition IDs
-var acrPullRoleId          = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-var kvSecretsUserRoleId    = '4633458b-17de-408a-b874-0445c86b69e6'  // read secret values (runtime)
-var kvSecretsOfficerRoleId = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'  // write secret values (deploy-time seed)
+// NOTE: This template avoids Azure role assignments entirely, so it can be
+// deployed by a plain *Contributor* (no Owner / User Access Administrator).
+//   - ACR pull uses the registry's ADMIN credentials (vault-stored password)
+//     instead of an AcrPull role assignment.
+//   - Key Vault uses ACCESS POLICIES (a vault property Contributor can set)
+//     instead of RBAC role assignments. The managed identity still reads
+//     secrets at runtime — just authorized by policy.
 
 // ── Identity ───────────────────────────────────────────────
 resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -71,48 +74,39 @@ resource uami 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   location: location
 }
 
-// ── Container registry ─────────────────────────────────────
+// ── Container registry (admin creds → no AcrPull role needed) ──
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: acrName
   location: location
   sku: { name: 'Basic' }
   properties: {
-    adminUserEnabled: false
+    adminUserEnabled: true
   }
 }
 
-resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, uami.id, acrPullRoleId)
-  scope: acr
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
-    principalId: uami.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// ── Key Vault + secrets ────────────────────────────────────
+// ── Key Vault + secrets (access policies → no RBAC role needed) ──
 resource kv 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: kvName
   location: location
   properties: {
     tenantId: subscription().tenantId
     sku: { family: 'A', name: 'standard' }
-    enableRbacAuthorization: true
+    enableRbacAuthorization: false
     enableSoftDelete: true
-  }
-}
-
-// The principal running this deployment must be able to WRITE secret values.
-// On an RBAC-authorized vault that requires a data-plane role, not just
-// Contributor — grant it here and seed the secrets only after it lands.
-resource deployerSecretsOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(kv.id, deployer().objectId, kvSecretsOfficerRoleId)
-  scope: kv
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsOfficerRoleId)
-    principalId: deployer().objectId
-    principalType: 'User'
+    accessPolicies: [
+      {
+        // runtime: the managed identity reads secret values
+        tenantId: subscription().tenantId
+        objectId: uami.properties.principalId
+        permissions: { secrets: [ 'get', 'list' ] }
+      }
+      {
+        // deploy-time: the principal running the deployment seeds secrets
+        tenantId: subscription().tenantId
+        objectId: deployer().objectId
+        permissions: { secrets: [ 'get', 'list', 'set' ] }
+      }
+    ]
   }
 }
 
@@ -120,24 +114,12 @@ resource kvSecretOpenAi 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: kv
   name: 'azure-openai-api-key'
   properties: { value: azureOpenAiApiKey }
-  dependsOn: [ deployerSecretsOfficer ]
 }
 
 resource kvSecretDbUrl 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: kv
   name: 'database-url'
   properties: { value: databaseUrl }
-  dependsOn: [ deployerSecretsOfficer ]
-}
-
-resource kvSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(kv.id, uami.id, kvSecretsUserRoleId)
-  scope: kv
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
-    principalId: uami.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
 }
 
 // ── Observability + ACA environment ────────────────────────
@@ -169,20 +151,27 @@ resource acaEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 var envDomain   = acaEnv.properties.defaultDomain
 var backendFqdn = 'triage-backend.internal.${envDomain}'
 
-// Shared bits for every app's registry + identity block
-var registries = [
-  { server: acr.properties.loginServer, identity: uami.id }
-]
 var identityBlock = {
   type: 'UserAssigned'
   userAssignedIdentities: { '${uami.id}': {} }
 }
 
-// KV-backed secrets block (backend + index job)
-var secretBlock = [
+// Registry pull via ACR admin creds (password stored as an app secret).
+var registries = [
+  { server: acr.properties.loginServer, username: acr.listCredentials().username, passwordSecretRef: 'acr-password' }
+]
+var acrPasswordSecret = {
+  name: 'acr-password'
+  value: acr.listCredentials().passwords[0].value
+}
+
+// KV-backed secrets (backend + index job), resolved at runtime by the identity.
+var kvSecrets = [
   { name: 'azure-openai-api-key', keyVaultUrl: '${kv.properties.vaultUri}secrets/azure-openai-api-key', identity: uami.id }
   { name: 'database-url',         keyVaultUrl: '${kv.properties.vaultUri}secrets/database-url',          identity: uami.id }
 ]
+// Apps that need KV secrets carry both the KV refs and the ACR password.
+var backendSecrets = concat(kvSecrets, [ acrPasswordSecret ])
 
 // Non-secret env shared by backend + index job
 var aiEnv = [
@@ -212,7 +201,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
         stickySessions: { affinity: 'sticky' }
       }
       registries: registries
-      secrets: secretBlock
+      secrets: backendSecrets
     }
     template: {
       containers: [
@@ -237,7 +226,7 @@ resource backendApp 'Microsoft.App/containerApps@2024-03-01' = {
       scale: { minReplicas: 1, maxReplicas: 1 }
     }
   }
-  dependsOn: [ acrPull, kvSecretsUser, kvSecretOpenAi, kvSecretDbUrl ]
+  dependsOn: [ kvSecretOpenAi, kvSecretDbUrl ]
 }
 
 // ── Mock services (internal) ───────────────────────────────
@@ -255,6 +244,7 @@ resource mockApps 'Microsoft.App/containerApps@2024-03-01' = [for m in mocks: {
         transport: 'auto'
       }
       registries: registries
+      secrets: [ acrPasswordSecret ]
     }
     template: {
       containers: [
@@ -272,7 +262,6 @@ resource mockApps 'Microsoft.App/containerApps@2024-03-01' = [for m in mocks: {
       scale: { minReplicas: 0, maxReplicas: 1 }
     }
   }
-  dependsOn: [ acrPull ]
 }]
 
 // ── Frontend (external, nginx) ─────────────────────────────
@@ -290,6 +279,7 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
         transport: 'auto'
       }
       registries: registries
+      secrets: [ acrPasswordSecret ]
     }
     template: {
       containers: [
@@ -307,7 +297,6 @@ resource frontendApp 'Microsoft.App/containerApps@2024-03-01' = {
       scale: { minReplicas: 0, maxReplicas: 1 }
     }
   }
-  dependsOn: [ acrPull ]
 }
 
 // ── Index-build job (manual trigger): python -m backend.rag.pipeline ──
@@ -323,7 +312,7 @@ resource indexJob 'Microsoft.App/jobs@2024-03-01' = {
       replicaRetryLimit: 1
       manualTriggerConfig: { parallelism: 1, replicaCompletionCount: 1 }
       registries: registries
-      secrets: secretBlock
+      secrets: backendSecrets
     }
     template: {
       containers: [
@@ -337,7 +326,7 @@ resource indexJob 'Microsoft.App/jobs@2024-03-01' = {
       ]
     }
   }
-  dependsOn: [ acrPull, kvSecretsUser, kvSecretOpenAi, kvSecretDbUrl ]
+  dependsOn: [ kvSecretOpenAi, kvSecretDbUrl ]
 }
 
 // ── Outputs ────────────────────────────────────────────────
