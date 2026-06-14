@@ -30,8 +30,15 @@ LOCATION="${LOCATION:-eastus}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo ">> Subscription: $(az account show --query name -o tsv)"
-echo ">> Resource group: $RESOURCE_GROUP   Region: $LOCATION"
-az group create -n "$RESOURCE_GROUP" -l "$LOCATION" >/dev/null
+# Use the resource group as-is if it already exists (honour its region);
+# only create it when missing.
+if az group show -n "$RESOURCE_GROUP" >/dev/null 2>&1; then
+  LOCATION="$(az group show -n "$RESOURCE_GROUP" --query location -o tsv)"
+  echo ">> Using existing resource group '$RESOURCE_GROUP' ($LOCATION)"
+else
+  echo ">> Creating resource group '$RESOURCE_GROUP' in $LOCATION"
+  az group create -n "$RESOURCE_GROUP" -l "$LOCATION" >/dev/null
+fi
 
 echo ">> Validating Bicep..."
 az bicep build -f "${SCRIPT_DIR}/main.bicep" --stdout >/dev/null && echo "   Bicep OK"
