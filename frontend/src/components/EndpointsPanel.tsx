@@ -4,7 +4,6 @@ interface Endpoint {
   method: 'GET' | 'POST' | 'WS' | 'DEL'
   path: string
   desc: string
-  basePort: number
 }
 
 interface ServiceGroup {
@@ -12,6 +11,7 @@ interface ServiceGroup {
   port: number
   color: string
   icon: string
+  app?: boolean   // true = this app's own API (browser-reachable via the proxy)
   endpoints: Endpoint[]
 }
 
@@ -21,79 +21,58 @@ const SERVICES: ServiceGroup[] = [
     port: 8000,
     color: 'text-blue-400',
     icon: '⚙️',
+    app: true,
     endpoints: [
-      { method: 'POST', path: '/alert',                    desc: 'Ingest alert & start triage',        basePort: 8000 },
-      { method: 'GET',  path: '/incidents',                desc: 'List all incidents',                 basePort: 8000 },
-      { method: 'GET',  path: '/incidents/{id}',           desc: 'Get incident + report',              basePort: 8000 },
-      { method: 'POST', path: '/incidents/{id}/resolve',   desc: 'Resolve + generate post-mortem',     basePort: 8000 },
-      { method: 'GET',  path: '/predictions',              desc: 'Current predictive alerts',          basePort: 8000 },
-      { method: 'GET',  path: '/post-mortems',             desc: 'All generated post-mortems',         basePort: 8000 },
-      { method: 'GET',  path: '/post-mortems/{id}',        desc: 'Get post-mortem by incident ID',     basePort: 8000 },
-      { method: 'GET',  path: '/health',                   desc: 'Health check',                       basePort: 8000 },
-      { method: 'GET',  path: '/docs',                     desc: 'Swagger UI',                         basePort: 8000 },
-      { method: 'WS',   path: '/ws',                       desc: 'Live WebSocket updates',             basePort: 8000 },
+      { method: 'POST', path: '/alert',                  desc: 'Ingest alert & start triage (opens the form)' },
+      { method: 'GET',  path: '/incidents',              desc: 'List all incidents' },
+      { method: 'GET',  path: '/incidents/{id}',         desc: 'Get incident + report (select a card)' },
+      { method: 'POST', path: '/incidents/{id}/resolve', desc: 'Resolve + post-mortem (Resolve button)' },
+      { method: 'GET',  path: '/predictions',            desc: 'Current predictive alerts' },
+      { method: 'GET',  path: '/post-mortems',           desc: 'All generated post-mortems' },
+      { method: 'GET',  path: '/post-mortems/{id}',      desc: 'Get post-mortem by incident ID' },
+      { method: 'GET',  path: '/health',                 desc: 'Health check' },
+      { method: 'GET',  path: '/docs',                   desc: 'Swagger UI' },
+      { method: 'WS',   path: '/ws',                     desc: 'Live WebSocket updates' },
     ],
   },
   {
     name: 'Mock Jira',
-    port: 8001,
-    color: 'text-blue-300',
-    icon: '🎫',
+    port: 8001, color: 'text-blue-300', icon: '🎫',
     endpoints: [
-      { method: 'GET', path: '/api/incidents/search', desc: 'Search past incidents', basePort: 8001 },
-      { method: 'GET', path: '/api/incidents/{id}',   desc: 'Get ticket by ID',      basePort: 8001 },
-      { method: 'GET', path: '/health',               desc: 'Health check',          basePort: 8001 },
+      { method: 'GET', path: '/api/incidents/search', desc: 'Search past incidents' },
+      { method: 'GET', path: '/api/incidents/{id}',   desc: 'Get ticket by ID' },
     ],
   },
   {
     name: 'Mock Splunk',
-    port: 8002,
-    color: 'text-orange-300',
-    icon: '📋',
+    port: 8002, color: 'text-orange-300', icon: '📋',
     endpoints: [
-      { method: 'GET', path: '/api/logs/search', desc: 'Search log entries',          basePort: 8002 },
-      { method: 'GET', path: '/api/logs/stats',  desc: 'Log index statistics',        basePort: 8002 },
-      { method: 'GET', path: '/api/logs/trends', desc: 'Error rate trend data',       basePort: 8002 },
-      { method: 'GET', path: '/health',          desc: 'Health check',                basePort: 8002 },
+      { method: 'GET', path: '/api/logs/search', desc: 'Search log entries' },
+      { method: 'GET', path: '/api/logs/trends', desc: 'Error rate trend data' },
     ],
   },
   {
     name: 'Mock ServiceNow',
-    port: 8003,
-    color: 'text-purple-300',
-    icon: '🔧',
+    port: 8003, color: 'text-purple-300', icon: '🔧',
     endpoints: [
-      { method: 'GET',  path: '/api/incidents/search', desc: 'Search incidents',   basePort: 8003 },
-      { method: 'GET',  path: '/api/incidents/{id}',   desc: 'Get ticket by ID',   basePort: 8003 },
-      { method: 'POST', path: '/api/incidents',        desc: 'Create new ticket',  basePort: 8003 },
-      { method: 'GET',  path: '/api/incidents',        desc: 'List all tickets',   basePort: 8003 },
-      { method: 'GET',  path: '/health',               desc: 'Health check',       basePort: 8003 },
+      { method: 'GET',  path: '/api/incidents/search', desc: 'Search incidents' },
+      { method: 'POST', path: '/api/incidents',        desc: 'Create new ticket' },
     ],
   },
   {
     name: 'Mock Slack',
-    port: 8004,
-    color: 'text-green-300',
-    icon: '💬',
+    port: 8004, color: 'text-green-300', icon: '💬',
     endpoints: [
-      { method: 'POST', path: '/api/slack/post',              desc: 'Post report message',  basePort: 8004 },
-      { method: 'GET',  path: '/api/slack/messages',          desc: 'List all messages',    basePort: 8004 },
-      { method: 'GET',  path: '/api/slack/messages/{id}',     desc: 'Get message by ID',    basePort: 8004 },
-      { method: 'GET',  path: '/health',                      desc: 'Health check',         basePort: 8004 },
+      { method: 'POST', path: '/api/slack/post',     desc: 'Post report message' },
+      { method: 'GET',  path: '/api/slack/messages', desc: 'List all messages' },
     ],
   },
   {
     name: 'Mock On-Call',
-    port: 8005,
-    color: 'text-red-300',
-    icon: '📟',
+    port: 8005, color: 'text-red-300', icon: '📟',
     endpoints: [
-      { method: 'GET',  path: '/api/oncall/current',            desc: 'Current on-call engineer',    basePort: 8005 },
-      { method: 'GET',  path: '/api/oncall/schedule',           desc: 'Full team schedule',          basePort: 8005 },
-      { method: 'GET',  path: '/api/oncall/by-service/{svc}',   desc: 'On-call by service name',     basePort: 8005 },
-      { method: 'POST', path: '/api/oncall/page',               desc: 'Page on-call engineer',       basePort: 8005 },
-      { method: 'GET',  path: '/api/oncall/pages',              desc: 'List page events',            basePort: 8005 },
-      { method: 'GET',  path: '/health',                        desc: 'Health check',                basePort: 8005 },
+      { method: 'GET',  path: '/api/oncall/current', desc: 'Current on-call engineer' },
+      { method: 'POST', path: '/api/oncall/page',    desc: 'Page on-call engineer' },
     ],
   },
 ]
@@ -105,31 +84,30 @@ const methodColors: Record<string, string> = {
   DEL:  'bg-red-500/20 text-red-300 border-red-500/40',
 }
 
-function EndpointRow({ ep }: { ep: Endpoint }) {
-  const url = `http://localhost:${ep.basePort}${ep.path.replace(/{.*?}/g, '1')}`
-  const displayUrl = `http://localhost:${ep.basePort}${ep.path}`
-  const isClickable = ep.method === 'GET'
+function EndpointRow({ ep, isApp, onNewAlert }: { ep: Endpoint; isApp: boolean; onNewAlert?: () => void }) {
+  // App GET endpoints without a path param are browser-reachable via relative paths
+  // (nginx proxy in prod, Vite proxy in dev). Mock endpoints are internal-only.
+  const linkable = isApp && ep.method === 'GET' && !ep.path.includes('{')
+  const isAlert  = isApp && ep.method === 'POST' && ep.path === '/alert'
 
   return (
-    <div className="flex items-start gap-2 py-1 group">
+    <div className="flex items-start gap-2 py-1">
       <span className={`text-xs px-1 py-0.5 rounded border flex-shrink-0 font-mono ${methodColors[ep.method]}`}>
         {ep.method}
       </span>
       <div className="flex-1 min-w-0">
-        {isClickable ? (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs font-mono text-slate-300 hover:text-white break-all leading-tight block"
-            title={displayUrl}
-          >
+        {isAlert && onNewAlert ? (
+          <button onClick={onNewAlert}
+                  className="text-xs font-mono text-blue-400 hover:text-blue-300 hover:underline break-all leading-tight block text-left">
+            {ep.path}  ➜ open form
+          </button>
+        ) : linkable ? (
+          <a href={ep.path} target="_blank" rel="noopener noreferrer"
+             className="text-xs font-mono text-slate-300 hover:text-white break-all leading-tight block">
             {ep.path}
           </a>
         ) : (
-          <span className="text-xs font-mono text-slate-400 break-all leading-tight block">
-            {ep.path}
-          </span>
+          <span className="text-xs font-mono text-slate-400 break-all leading-tight block">{ep.path}</span>
         )}
         <p className="text-xs text-slate-600 leading-tight mt-0.5">{ep.desc}</p>
       </div>
@@ -137,35 +115,25 @@ function EndpointRow({ ep }: { ep: Endpoint }) {
   )
 }
 
-function ServiceSection({ svc }: { svc: ServiceGroup }) {
-  const [open, setOpen] = useState(true)
-  const healthUrl = `http://localhost:${svc.port}/health`
+function ServiceSection({ svc, onNewAlert }: { svc: ServiceGroup; onNewAlert?: () => void }) {
+  const [open, setOpen] = useState(svc.app === true)
 
   return (
     <div className="mb-3">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 text-left mb-1 group"
-      >
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 text-left mb-1">
         <span className="text-sm">{svc.icon}</span>
         <span className={`text-xs font-semibold ${svc.color} flex-1`}>{svc.name}</span>
-        <a
-          href={healthUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
-          className="text-xs text-slate-600 hover:text-green-400 mr-1"
-          title="Health check"
-        >
-          :{svc.port}
-        </a>
+        {!svc.app && <span className="text-xs text-slate-600 mr-1">internal</span>}
         <span className="text-slate-600 text-xs">{open ? '▲' : '▼'}</span>
       </button>
 
       {open && (
         <div className="pl-1 border-l border-slate-700 space-y-0.5">
+          {!svc.app && (
+            <p className="text-xs text-slate-600 italic py-0.5">Called server-side by the agents — not from the browser.</p>
+          )}
           {svc.endpoints.map((ep) => (
-            <EndpointRow key={`${ep.method}${ep.path}`} ep={ep} />
+            <EndpointRow key={`${ep.method}${ep.path}`} ep={ep} isApp={svc.app === true} onNewAlert={onNewAlert} />
           ))}
         </div>
       )}
@@ -174,48 +142,38 @@ function ServiceSection({ svc }: { svc: ServiceGroup }) {
 }
 
 interface PanelProps {
-  embedded?: boolean  // true = no fixed width/border, fills parent
+  embedded?: boolean
+  onNewAlert?: () => void
 }
 
-export const EndpointsPanel: React.FC<PanelProps> = ({ embedded = false }) => {
+export const EndpointsPanel: React.FC<PanelProps> = ({ embedded = false, onNewAlert }) => {
   const outer = embedded
     ? 'flex flex-col h-full overflow-hidden'
     : 'w-60 flex-shrink-0 border-l border-slate-700 bg-slate-900 flex flex-col overflow-hidden'
 
   return (
     <div className={outer}>
-      {!embedded && (
-        <div className="px-3 py-3 border-b border-slate-700 flex-shrink-0">
-          <h2 className="text-xs font-semibold text-slate-300 flex items-center gap-2">
-            <span>🔌</span> API Endpoints
-          </h2>
-          <p className="text-xs text-slate-600 mt-0.5">Click GET paths to open</p>
-        </div>
-      )}
-
-      {embedded && (
-        <div className="px-3 py-2 border-b border-slate-700/50 flex-shrink-0">
-          <p className="text-xs text-slate-500">Click GET paths to open in browser</p>
-        </div>
-      )}
+      <div className="px-3 py-2 border-b border-slate-700/50 flex-shrink-0">
+        <p className="text-xs text-slate-500">App API is interactive · GET paths open in a new tab</p>
+      </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-2">
         {SERVICES.map((svc) => (
-          <ServiceSection key={svc.name} svc={svc} />
+          <ServiceSection key={svc.name} svc={svc} onNewAlert={onNewAlert} />
         ))}
       </div>
 
-      {/* Quick links */}
       <div className="border-t border-slate-700 px-3 py-2 flex-shrink-0 space-y-1">
         <p className="text-xs text-slate-500 font-medium mb-1">Quick Links</p>
-        <a href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer"
+        <a href="/docs" target="_blank" rel="noopener noreferrer"
           className="flex items-center gap-2 text-xs text-blue-400 hover:text-blue-300">
-          <span>📖</span> Swagger UI
+          <span>📖</span> Swagger UI (/docs)
         </a>
-        <a href="http://localhost:5173" target="_blank" rel="noopener noreferrer"
-          className="flex items-center gap-2 text-xs text-blue-400 hover:text-blue-300">
-          <span>🖥️</span> React UI
-        </a>
+        {onNewAlert && (
+          <button onClick={onNewAlert} className="flex items-center gap-2 text-xs text-blue-400 hover:text-blue-300">
+            <span>🚨</span> New Alert (POST /alert)
+          </button>
+        )}
       </div>
     </div>
   )

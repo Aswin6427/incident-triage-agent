@@ -10,12 +10,13 @@ interface Props {
   selectedId: string | null
   onSelect: (id: string) => void
   isConnected: boolean
+  onNewAlert: () => void
 }
 
 type Tab = 'feed' | 'endpoints'
 
 export const AlertFeed: React.FC<Props> = ({
-  incidents, predictions, selectedId, onSelect, isConnected,
+  incidents, predictions, selectedId, onSelect, isConnected, onNewAlert,
 }) => {
   const [activeTab, setActiveTab] = useState<Tab>('feed')
 
@@ -67,6 +68,14 @@ export const AlertFeed: React.FC<Props> = ({
             API Endpoints
           </button>
         </div>
+
+        {/* Create an alert manually (POST /alert) */}
+        <button
+          onClick={onNewAlert}
+          className="w-full mt-2 text-sm font-medium py-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center gap-1.5"
+        >
+          <span className="text-base leading-none">+</span> New Alert
+        </button>
       </div>
 
       {/* Tab: Incident Feed */}
@@ -116,10 +125,9 @@ export const AlertFeed: React.FC<Props> = ({
               <div className="text-center text-slate-500 text-sm mt-12 px-4">
                 <p className="text-3xl mb-3">🟢</p>
                 <p className="font-medium">No active incidents</p>
-                <p className="text-xs mt-1">Push an alert to start triage:</p>
-                <code className="text-xs text-slate-400 mt-2 block bg-slate-800 px-2 py-1 rounded">
-                  python scripts/push_alert.py --scenario db_timeout
-                </code>
+                <p className="text-xs mt-1">
+                  Click <button onClick={onNewAlert} className="text-blue-400 font-medium hover:underline">+ New Alert</button> to start a triage.
+                </p>
               </div>
             ) : (
               sortedIncidents.map(inc => (
@@ -138,7 +146,7 @@ export const AlertFeed: React.FC<Props> = ({
       {/* Tab: API Endpoints */}
       {activeTab === 'endpoints' && (
         <div className="flex-1 overflow-hidden">
-          <EndpointsPanel embedded />
+          <EndpointsPanel embedded onNewAlert={onNewAlert} />
         </div>
       )}
 

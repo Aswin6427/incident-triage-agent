@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { AlertFeed } from './components/AlertFeed'
 import { TriageReport } from './components/TriageReport'
 import { AgentFlowPanel } from './components/AgentFlowPanel'
+import { NewAlertModal } from './components/NewAlertModal'
 import { useWebSocket } from './hooks/useWebSocket'
 import { Incident, Prediction, WsEvent, AgentSteps } from './types'
 
@@ -14,6 +15,7 @@ function App() {
   const [incidents,   setIncidents]   = useState<Record<string, Incident>>({})
   const [predictions, setPredictions] = useState<Record<string, Prediction>>({})
   const [selectedId,  setSelectedId]  = useState<string | null>(null)
+  const [showNewAlert, setShowNewAlert] = useState(false)
   const prevConnected = useRef(false)
 
   const fetchIncidents = useCallback((autoSelect = false) => {
@@ -160,6 +162,7 @@ function App() {
         selectedId={selectedId}
         onSelect={setSelectedId}
         isConnected={isConnected}
+        onNewAlert={() => setShowNewAlert(true)}
       />
 
       {/* CENTER-LEFT: Agent flow (always visible) */}
@@ -208,6 +211,13 @@ function App() {
           </div>
         )}
       </main>
+
+      {showNewAlert && (
+        <NewAlertModal
+          onClose={() => setShowNewAlert(false)}
+          onCreated={(id) => setSelectedId(id)}
+        />
+      )}
 
     </div>
   )
